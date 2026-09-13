@@ -1,0 +1,199 @@
+-- WoW AH Tracker (v1)
+--
+-- Reads WowAhTrackerData, a Lua table exported by the wow-ah-tracker sync
+-- pipeline (see repo README) and refreshed on this machine by a scheduled
+-- Windows job - this addon does no network access of its own. data.lua may
+-- be missing or stale (fetch job never ran, or hasn't run since login); all
+-- of this is handled gracefully rather than throwing a Lua error.
+
+local function printMsg(msg)
+	DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99WoW AH Tracker|r: " .. msg)
+end
+
+local function copperToGoldString(copper)
+	if not copper then
+		return "?"
+	end
+	return string.format("%.2fg", copper / 10000)
+end
+
+-- GetRealmName() strips spaces from the realm name (a documented WoW API
+-- quirk - e.g. "Tarren Mill" becomes "TarrenMill"), but the connected-realm
+-- export keeps the names as Blizzard's own API returns them, spaces
+-- included. Normalize both sides the same way before comparing, or every
+-- multi-word realm name would fail to match.
+local function normalizeRealmName(name)
+	return (name or ""):gsub("%s+", ""):lower()
+end
+
+local function findMyConnectedRealmId()
+	if not WowAhTrackerData or not WowAhTrackerData.connectedRealms then
+		return nil
+	end
+	local myRealm = normalizeRealmName(GetRealmName())
+	for connectedRealmId, realmNames in pairs(WowAhTrackerData.connectedRealms) do
+		for _, name in ipairs(realmNames) do
+			if normalizeRealmName(name) == myRealm then
+				return tonumber(connectedRealmId)
+			end
+		end
+	end
+	return nil
+end
+
+local function findMyRealmRow(item, myConnectedRealmId)
+	if not myConnectedRealmId or not item.realms then
+		return nil
+	end
+	for _, row in ipairs(item.realms) do
+		if row.connectedRealmId == myConnectedRealmId then
+			return row
+		end
+	end
+	return nil
+end
+
+-- Sorted item ids so output order is stable run to run, not hash-order.
+local function sortedItemIds(items)
+	local ids = {}
+	for itemId in pairs(items) do
+		table.insert(ids, itemId)
+	end
+	table.sort(ids, function(a, b)
+		return tonumber(a) < tonumber(b)
+	end)
+	return ids
+end
+
+local function buildSummaryLines()
+	local lines = {}
+
+	if not WowAhTrackerData then
+		table.insert(
+			lines,
+			"No data file found - has the scheduled Windows fetch job run since this addon was installed?"
+		)
+		return lines
+	end
+	if not WowAhTrackerData.items or next(WowAhTrackerData.items) == nil then
+		table.insert(lines, "Data file loaded but has no tracked items.")
+		return lines
+	end
+
+	local myConnectedRealmId = findMyConnectedRealmId()
+	if not myConnectedRealmId then
+		table.insert(
+			lines,
+			string.format(
+				"Could not match your realm (%s) to a connected-realm group - connectedRealms data may be missing or stale.",
+				GetRealmName()
+			)
+		)
+	end
+
+	for _, itemId in ipairs(sortedItemIds(WowAhTrackerData.items)) do
+		local item = WowAhTrackerData.items[itemId]
+		local line = string.format(
+			"%s: EU min %s, median %s",
+			item.name or ("item " .. tostring(itemId)),
+			copperToGoldString(item.euMinCopper),
+			copperToGoldString(item.euMedianCopper)
+		)
+
+		local myRow = findMyRealmRow(item, myConnectedRealmId)
+		if myRow then
+			local compareText
+			if item.euMinCopper and myRow.minPriceCopper <= item.euMinCopper then
+				compareText = "at or below EU min"
+			elseif item.euMinCopper then
+				compareText = copperToGoldString(myRow.minPriceCopper - item.euMinCopper) .. " above EU min"
+			else
+				compareText = "no EU min to compare against"
+			end
+			line = line
+				.. string.format(
+					" | your realm: %s (%s, qty %d)",
+					copperToGoldString(myRow.minPriceCopper),
+					compareText,
+					myRow.quantity or 0
+				)
+		elseif myConnectedRealmId then
+			line = line .. " | no listings on your realm right now"
+		end
+
+		table.insert(lines, line)
+	end
+
+	return lines
+end
+
+local function printSummary()
+	printMsg("Price summary:")
+	for _, line in ipairs(buildSummaryLines()) do
+		DEFAULT_CHAT_FRAME:AddMessage("  " .. line)
+	end
+end
+
+-- C_AuctionHouse.SendSearchQuery only works while the Auction House window
+-- is open - calling it otherwise silently does nothing useful (no error,
+-- no results), which reads as the addon being broken. Check visibility
+-- ourselves and say so plainly instead.
+local function searchAuctionHouse(query)
+	if not query or query == "" then
+		printMsg("Usage: /waht search <item name>")
+		return
+	end
+	if not (AuctionHouseFrame and AuctionHouseFrame:IsShown()) then
+		printMsg("Open the Auction House window first - the search API only works while it's active.")
+		return
+	end
+	if not WowAhTrackerData or not WowAhTrackerData.items then
+		printMsg("No tracked-item data loaded - can't resolve a name to an item id.")
+		return
+	end
+
+	local needle = query:lower()
+	local matchId, matchName
+	for itemId, item in pairs(WowAhTrackerData.items) do
+		if item.name and item.name:lower():find(needle, 1, true) then
+			matchId, matchName = tonumber(itemId), item.name
+			break
+		end
+	end
+
+	if not matchId then
+		printMsg(string.format('No tracked item matches "%s".', query))
+		return
+	end
+
+	-- Assumes the item is listed under its own item id, as both current
+	-- placeholder items are. A cageable battle pet would need
+	-- MakeItemKey(itemID, nil, nil, battlePetSpeciesID) instead - not
+	-- handled yet since no tracked item currently needs it (see CLAUDE.md).
+	local itemKey = C_AuctionHouse.MakeItemKey(matchId)
+	local sorts = { { sortOrder = Enum.AuctionHouseSortOrder.Buyout, reversed = false } }
+	C_AuctionHouse.SendSearchQuery(itemKey, sorts, true)
+	printMsg(string.format("Searching the Auction House for %s...", matchName))
+end
+
+SLASH_WOWAHTRACKER1 = "/waht"
+SlashCmdList["WOWAHTRACKER"] = function(msg)
+	local command, rest = (msg or ""):match("^(%S*)%s*(.-)$")
+	command = (command or ""):lower()
+
+	if command == "" then
+		printSummary()
+	elseif command == "search" then
+		searchAuctionHouse(rest)
+	else
+		printMsg("Unknown command. Usage: /waht (summary) or /waht search <item name>")
+	end
+end
+
+local eventFrame = CreateFrame("Frame")
+eventFrame:RegisterEvent("PLAYER_LOGIN")
+eventFrame:SetScript("OnEvent", function(_, event)
+	if event == "PLAYER_LOGIN" then
+		printSummary()
+	end
+end)
