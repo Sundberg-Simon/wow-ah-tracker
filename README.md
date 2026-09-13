@@ -46,12 +46,20 @@ npm run health       # checks sync_runs for dropped ticks / partial runs / stale
 
 ## Viewing the data
 
-`npm run report` writes a single self-contained `reports/latest.html` (no
-server, no external assets, gitignored since it's generated output). For
-each active tracked item it shows: current min/median price across EU
-realms, total quantity, a per-realm breakdown table, and a price trend
-sparkline once enough hourly syncs have accumulated. Re-run it any time you
-want a fresh snapshot.
+The report is auto-published after every sync run via GitHub Pages:
+
+**https://sundberg-simon.github.io/wow-ah-tracker/latest.html**
+
+No manual step needed - `sync.yml` regenerates and redeploys it after each
+successful sync, so that URL always reflects the latest data. For each
+active tracked item it shows: current min/median price across EU realms,
+total quantity, a per-realm breakdown table, and a price trend sparkline
+once enough hourly syncs have accumulated.
+
+`npm run report` still exists for local/ad-hoc use (e.g. checking data
+before it's synced to Pages, or running against a different DB) - it writes
+the same self-contained `reports/latest.html` locally (no server, no
+external assets, gitignored since it's generated output).
 
 ## Scheduling
 

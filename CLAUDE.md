@@ -120,6 +120,23 @@ sista steg"). [Uppdatera den här raden manuellt allt eftersom.]
    Bakgrund: `docs/sync-pipeline-review-2026-09-13.md` (fynd 1-7) — läs
    den för fullständigt resonemang bakom #7-#9 innan du föreslår att
    förenkla något av detta.
+10. **Rapporten auto-publiceras via GitHub Pages efter varje sync-körning
+    — inget manuellt `npm run report` längre för att se aktuell data.**
+    `sync.yml`: efter `npm run sync` körs `npm run report` (läser bara
+    från DB:n, samma `DATABASE_URL`), sedan
+    `actions/upload-pages-artifact@v3` (laddar upp `reports/`-mappen —
+    OK att `reports/latest.html` är gitignorerad, artifact-upload kräver
+    inte git-tracking, bara att filen finns på disk i jobbet). Ett
+    separat `deploy`-jobb (`needs: sync`, `environment: github-pages`)
+    kör `actions/deploy-pages@v4` och publicerar den. Möjliggjort av
+    #8 (Pages är gratis för publika repon). URL:
+    https://sundberg-simon.github.io/wow-ah-tracker/latest.html — inte
+    repo-roten, eftersom filen heter `latest.html` inte `index.html`.
+    Kräver `pages: write` + `id-token: write` i workflow-permissions.
+    OBS — engångssteg som bara kan göras i webb-UI:t, inte via kod: Pages
+    måste vara påslaget i Settings → Pages → "Build and deployment" →
+    källa "GitHub Actions" (inte "Deploy from a branch") innan första
+    deploy-körningen kan lyckas.
 
 ## Vad som är byggt och verifierat hittills
 - **Milestone 1**: OAuth-token, connected-realm-upplösning, per-realm-
