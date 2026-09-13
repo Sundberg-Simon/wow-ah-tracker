@@ -40,7 +40,17 @@ npm run milestone1   # no DB needed: token + connected-realm count + one-realm f
 npm run migrate      # applies src/db/schema.sql
 npm run sync         # one full sync pass across all EU connected realms
 npm run query -- 128671   # print EU-wide history for an item id
+npm run report       # writes reports/latest.html - open it in a browser
 ```
+
+## Viewing the data
+
+`npm run report` writes a single self-contained `reports/latest.html` (no
+server, no external assets, gitignored since it's generated output). For
+each active tracked item it shows: current min/median price across EU
+realms, total quantity, a per-realm breakdown table, and a price trend
+sparkline once enough hourly syncs have accumulated. Re-run it any time you
+want a fresh snapshot.
 
 ## Scheduling
 

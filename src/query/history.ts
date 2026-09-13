@@ -88,3 +88,50 @@ export async function getEuWideHistory(
     totalQuantity: Number(r.total_quantity),
   }));
 }
+
+export interface LatestRealmPrice {
+  connectedRealmId: number | null;
+  realmNames: string[] | null;
+  minPriceCopper: number;
+  quantity: number;
+  listingCount: number;
+}
+
+/**
+ * Per-realm (and EU-wide commodity, if any) breakdown for one item as of
+ * its most recent sync run. Returns capturedAt: null if the item has no
+ * data yet.
+ */
+export async function getLatestPerRealmPrices(
+  itemId: number,
+): Promise<{ capturedAt: Date | null; rows: LatestRealmPrice[] }> {
+  const { rows: latest } = await pool.query(
+    `SELECT MAX(captured_at) AS captured_at FROM price_snapshots WHERE item_id = $1`,
+    [itemId],
+  );
+  const capturedAt: Date | null = latest[0]?.captured_at ?? null;
+  if (!capturedAt) {
+    return { capturedAt: null, rows: [] };
+  }
+
+  const { rows } = await pool.query(
+    `SELECT ps.connected_realm_id, cr.realm_names,
+            ps.min_price_copper, ps.quantity, ps.listing_count
+     FROM price_snapshots ps
+     LEFT JOIN connected_realms cr ON cr.connected_realm_id = ps.connected_realm_id
+     WHERE ps.item_id = $1 AND ps.captured_at = $2
+     ORDER BY ps.min_price_copper ASC`,
+    [itemId, capturedAt],
+  );
+
+  return {
+    capturedAt,
+    rows: rows.map((r) => ({
+      connectedRealmId: r.connected_realm_id,
+      realmNames: r.realm_names,
+      minPriceCopper: Number(r.min_price_copper),
+      quantity: r.quantity,
+      listingCount: r.listing_count,
+    })),
+  };
+}

@@ -9,6 +9,7 @@
     "milestone1": "tsx scripts/milestone1.ts",
     "migrate": "tsx scripts/migrate.ts",
     "query": "tsx scripts/queryHistory.ts",
+    "report": "tsx scripts/report.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
