@@ -10,19 +10,33 @@ tjänsten gick över till en betalversion.
 Milestone 1 och 2 klara och verifierade mot skarp data. Läslagret (v1) är
 byggt: `npm run report` skriver en lokal, självständig HTML-rapport
 (nuvarande pris/kvantitet per realm, regionalt min/median, pristrend) —
-ingen hosting, ingen webbapp. Projektet är live: privat GitHub-repo,
-GitHub Actions-workflow kör var 15:e minut med en 55-minuters
-självspärr i syncjobbet (se arkitekturbeslut #7) eftersom GitHub Actions
-cron visat sig tappa tick:ar opålitligt på det här repot. Secrets
-konfigurerade. Väntar fortfarande in 2-3h verifiering av att
-självspärren faktiskt no-opar dubbletter i skarp drift (se "Obligatoriskt
+ingen hosting, ingen webbapp. En fullständig granskning av sync-pipelinen
+(docs/sync-pipeline-review-2026-09-13.md) hittade och åtgärdade tre
+allvarliga brister: Actions-kvoten hade spruckit inom veckor på privat
+repo (löst genom att göra repot publikt, #8), partiella körningar kunde
+landa tyst som "kompletta" i läslagret (löst med transaktion +
+`sync_run_id` + partial-flagga, #9), och frånvaro (tappade tick:ar,
+slut kvot, stillastående data) upptäcktes inte alls (löst med separat
+`health.yml`-workflow tre ggr/dag). Även per-unit-prisbugg för framtida
+stackbara icke-commodity-items fixad, TLS-certifikatverifiering
+återaktiverad mot Neon, retry/timeout/`Last-Modified` tillagt i
+Blizzard-klienten. Allt verifierat lokalt (dubbelkörning för
+självspärr, simulerad realm-krasch för partial-hantering) och i skarp
+CI. Secrets konfigurerade. Väntar fortfarande in 2-3h verifiering av
+självspärren i naturlig (icke-manuellt-triggad) drift, samt att
+health-checken går grön i skarpt schemalagt läge (se "Obligatoriskt
 sista steg"). [Uppdatera den här raden manuellt allt eftersom.]
 
 ## Teknikstack — håll dig till detta, föreslå inte alternativ utan att fråga
 - Språk/runtime: TypeScript / Node.js (sync-jobb + query-helpers)
-- Körning: GitHub Actions (cron, en gång i timmen) — INTE en lokal
-  scheduler. Kontinuerlig historik är hela poängen med projektet, och en
-  lokal scheduler skulle ge hål i datan varje gång datorn är av/sover.
+- Körning: GitHub Actions (cron var 15:e minut + tidsbaserad självspärr,
+  se arkitekturbeslut #7) — INTE en lokal scheduler. Kontinuerlig
+  historik är hela poängen med projektet, och en lokal scheduler skulle
+  ge hål i datan varje gång datorn är av/sover.
+- Repot är publikt (arkitekturbeslut #8) — inte privat. Detta är en
+  fattad konsekvens av beslut #7 (Actions-minuter är gratis för publika
+  repon, vilket gör */15-kadensen möjlig utan kvotrisk), inte ett
+  fristående val att ifrågasätta separat.
 - Databas: Neon Postgres (gratis-tier), EU-region (London/AWS eu-west-2)
   — krävs eftersom GitHub Actions har ett efemärt filsystem; en lokal
   SQLite-fil duger inte här.
@@ -75,6 +89,37 @@ sista steg"). [Uppdatera den här raden manuellt allt eftersom.]
    själva uppslaget). En körning som startar men kraschar lämnas som
    `success = false` så nästa tick får försöka igen utan att vänta ut
    hela 55-minutersfönstret.
+8. **Repot är publikt.** Konsekvens av #7: med privat repo och */15-cron
+   spricker GitHub Actions gratiskvoten (2000 min/månad) inom ~2-3
+   veckor. Bekräftat säkert innan beslutet togs: `git log --all
+   --full-history` visar att varken `.env` eller de faktiska
+   secret-värdena (Blizzard client id/secret, Neon-lösenord) någonsin
+   committats, i någon branch. Secrets ligger enbart i GitHub Actions
+   secrets, aldrig i repot. Det enda som blir synligt för utomstående är
+   koden och `config/trackedItems.ts` (vilka items som trackas) — inte en
+   öppen fråga att backa från utan ny anledning.
+9. **En sync-körning är antingen komplett eller så finns den inte i
+   läslagret — aldrig tyst ofullständig.** Grundorsak: en körning som
+   kraschade halvvägs (t.ex. realm 47 av 92) skrev tidigare ändå de
+   redan hämtade raderna utan någon markör, så läslagret såg en
+   "komplett" timme med halva kvantiteten. Fix, i `runFullSync.ts`:
+   varje körnings rader taggas med `sync_run_id`; hela commit-steget
+   (connected_realms-upsert + price_snapshots-insert + markering av
+   `sync_runs` som klar) körs i EN transaktion; upp till 10% av
+   realmerna får misslyckas utan att hela körningen kastas (markeras
+   `partial = true` istället, resten av realmerna sparas ändå) —
+   annars skulle en enda trög realm blockera självspärren i #7 och ge
+   fyra fulla omförsök i timmen. `history.ts` filtrerar bort allt utom
+   `success AND NOT partial`-körningar (rader utan `sync_run_id`
+   antas kompletta — de föregår kolumnen). En tom auktionsdump för en
+   realm behandlas som ett fel, inte som "inga listningar" (en EU-realm
+   har aldrig legitimt noll auktioner). Verifierat lokalt: en simulerad
+   realm-krasch gav `partial = true`, `failed_realm_ids = {id}`, övriga
+   91 realmer sparades ändå, och läslagret hoppade korrekt vidare till
+   senaste kompletta körning istället för den partiella.
+   Bakgrund: `docs/sync-pipeline-review-2026-09-13.md` (fynd 1-7) — läs
+   den för fullständigt resonemang bakom #7-#9 innan du föreslår att
+   förenkla något av detta.
 
 ## Vad som är byggt och verifierat hittills
 - **Milestone 1**: OAuth-token, connected-realm-upplösning, per-realm-
@@ -85,9 +130,13 @@ sista steg"). [Uppdatera den här raden manuellt allt eftersom.]
   i en pass), query-helper verifierad (t.ex. EU-wide min-pris/kvantitet
   för ett item).
 - **Live**: GitHub-repo (github.com/Sundberg-Simon/wow-ah-tracker,
-  privat), hourly workflow (.github/workflows/sync.yml, `5 * * * *` +
-  manual workflow_dispatch), secrets satta via `gh` CLI. Ett skarpt
-  schemalagt pass har körts och skrivit en verifierad rad i DB:n.
+  publikt sedan granskningen 2026-09-13), sync-workflow
+  (.github/workflows/sync.yml, `*/15 * * * *` + manual
+  workflow_dispatch + 55-min självspärr), health-check-workflow
+  (.github/workflows/health.yml, tre ggr/dag), secrets satta via `gh`
+  CLI. Flera skarpa pass har körts och skrivit verifierade rader i
+  DB:n, inklusive ett verifierat partial-run-scenario (se
+  arkitekturbeslut #9).
 
 ## Vad vi medvetet skjuter upp (fråga innan du bygger något av detta)
 - **In-game-addon**: en companion-app synkar bevakad prisdata ner till en
@@ -125,3 +174,10 @@ faktisk sync (API-anrop + DB-skrivningar); den andra ska synas som en
 snabb no-op i loggen ("Skipping sync: last successful run was Xmin
 ago"), inte som ännu en full körning. Att cronen nu går oftare bevisar
 inget i sig — det är no-op-skippet som måste verifieras i skarp drift.
+
+Efter granskningen 2026-09-13 (docs/sync-pipeline-review-2026-09-13.md,
+arkitekturbeslut #9): kör `npm run health` (eller vänta på
+health.yml, tre ggr/dag) och bekräfta att den går grön i skarp drift
+efter att tillräckligt många schemalagda körningar hunnit samlas
+(~18 lyckade på 24h). Går den röd initialt är det förväntat tills
+kadensen stabiliserats — inte nödvändigtvis ett nytt fel.

@@ -37,10 +37,11 @@ commodities dump (EU-wide), or a real connected-realm ID otherwise.
 
 ```
 npm run milestone1   # no DB needed: token + connected-realm count + one-realm filter test
-npm run migrate      # applies src/db/schema.sql
-npm run sync         # one full sync pass across all EU connected realms
+npm run migrate      # applies src/db/schema.sql standalone (sync applies it automatically too)
+npm run sync         # applies schema, then one full sync pass across all EU connected realms
 npm run query -- 128671   # print EU-wide history for an item id
 npm run report       # writes reports/latest.html - open it in a browser
+npm run health       # checks sync_runs for dropped ticks / partial runs / stale data
 ```
 
 ## Viewing the data
@@ -54,10 +55,30 @@ want a fresh snapshot.
 
 ## Scheduling
 
-`.github/workflows/sync.yml` runs `npm run sync` hourly via GitHub Actions.
-Add `BLIZZARD_CLIENT_ID`, `BLIZZARD_CLIENT_SECRET`, and `DATABASE_URL` as
-repo secrets (Settings -> Secrets and variables -> Actions) and it just runs -
-no server of your own required.
+`.github/workflows/sync.yml` runs `npm run sync` every 15 minutes via GitHub
+Actions - not hourly. GitHub's cron scheduler was found to drop ticks
+unpredictably on this repo (confirmed via `createdAt` gaps in run history,
+not runner queue delay), so the workflow runs 4x/hour as a safety margin and
+`runFullSync()` self-throttles: it skips entirely (no API calls, no DB
+writes) if a successful run already happened in the last 55 minutes, keeping
+the effective cadence near-hourly regardless of dropped ticks. See
+`CLAUDE.md` for the full rationale - this is a locked decision, not an open
+question.
+
+The repo is public (Actions minutes are free for public repos on standard
+runners, which is what makes `*/15` affordable at all - see `CLAUDE.md`).
+No secrets live in the repo; add `BLIZZARD_CLIENT_ID`, `BLIZZARD_CLIENT_SECRET`,
+and `DATABASE_URL` as repo secrets (Settings -> Secrets and variables ->
+Actions) and it just runs - no server of your own required.
+
+A separate `.github/workflows/health.yml` runs `npm run health` three times a
+day: it queries `sync_runs` and fails (triggering GitHub's normal
+failed-run notification) if there haven't been enough successful runs
+recently, a gap is too large, a run came back partial, or Blizzard's own
+data dump has been stale for several runs in a row. This exists because
+GitHub only notifies on failures - dropped ticks, an exhausted Actions
+quota, or a stalled upstream dump all look like silence, not an error,
+without it.
 
 ## Adding/removing tracked items
 
