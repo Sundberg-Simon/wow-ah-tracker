@@ -125,14 +125,16 @@ sista steg"). [Uppdatera den här raden manuellt allt eftersom.]
     `sync.yml`: efter `npm run sync` körs `npm run report` (läser bara
     från DB:n, samma `DATABASE_URL`), sedan
     `actions/upload-pages-artifact@v3` (laddar upp `reports/`-mappen —
-    OK att `reports/latest.html` är gitignorerad, artifact-upload kräver
+    OK att `reports/index.html` är gitignorerad, artifact-upload kräver
     inte git-tracking, bara att filen finns på disk i jobbet). Ett
     separat `deploy`-jobb (`needs: sync`, `environment: github-pages`)
     kör `actions/deploy-pages@v4` och publicerar den. Möjliggjort av
     #8 (Pages är gratis för publika repon). URL:
-    https://sundberg-simon.github.io/wow-ah-tracker/latest.html — inte
-    repo-roten, eftersom filen heter `latest.html` inte `index.html`.
-    Kräver `pages: write` + `id-token: write` i workflow-permissions.
+    https://sundberg-simon.github.io/wow-ah-tracker/ — filen heter
+    `index.html` så repo-roten fungerar direkt, ingen `/index.html`-
+    suffix behövs (bytt från `latest.html` 2026-09-13 av precis den
+    anledningen). Kräver `pages: write` + `id-token: write` i
+    workflow-permissions.
     OBS — engångssteg som bara kan göras i webb-UI:t, inte via kod: Pages
     måste vara påslaget i Settings → Pages → "Build and deployment" →
     källa "GitHub Actions" (inte "Deploy from a branch") innan första

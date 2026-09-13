@@ -40,7 +40,7 @@ npm run milestone1   # no DB needed: token + connected-realm count + one-realm f
 npm run migrate      # applies src/db/schema.sql standalone (sync applies it automatically too)
 npm run sync         # applies schema, then one full sync pass across all EU connected realms
 npm run query -- 128671   # print EU-wide history for an item id
-npm run report       # writes reports/latest.html - open it in a browser
+npm run report       # writes reports/index.html - open it in a browser
 npm run health       # checks sync_runs for dropped ticks / partial runs / stale data
 ```
 
@@ -48,7 +48,7 @@ npm run health       # checks sync_runs for dropped ticks / partial runs / stale
 
 The report is auto-published after every sync run via GitHub Pages:
 
-**https://sundberg-simon.github.io/wow-ah-tracker/latest.html**
+**https://sundberg-simon.github.io/wow-ah-tracker/**
 
 No manual step needed - `sync.yml` regenerates and redeploys it after each
 successful sync, so that URL always reflects the latest data. For each
@@ -58,7 +58,7 @@ once enough hourly syncs have accumulated.
 
 `npm run report` still exists for local/ad-hoc use (e.g. checking data
 before it's synced to Pages, or running against a different DB) - it writes
-the same self-contained `reports/latest.html` locally (no server, no
+the same self-contained `reports/index.html` locally (no server, no
 external assets, gitignored since it's generated output).
 
 ## Scheduling

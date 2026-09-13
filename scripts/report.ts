@@ -1,6 +1,6 @@
 /**
  * v1 read layer: a single self-contained local HTML file, no server and no
- * external assets - open reports/latest.html directly in a browser. Run
+ * external assets - open reports/index.html directly in a browser. Run
  * with `npm run report` whenever you want a fresh look at the data.
  */
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -162,7 +162,7 @@ async function main() {
 
   const outDir = path.join(__dirname, "../reports");
   mkdirSync(outDir, { recursive: true });
-  const outPath = path.join(outDir, "latest.html");
+  const outPath = path.join(outDir, "index.html");
   writeFileSync(outPath, html, "utf8");
   console.log(`Report written to ${outPath}`);
 }

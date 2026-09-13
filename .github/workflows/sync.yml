@@ -37,7 +37,7 @@ jobs:
           BLIZZARD_CLIENT_ID: ${{ secrets.BLIZZARD_CLIENT_ID }}
           BLIZZARD_CLIENT_SECRET: ${{ secrets.BLIZZARD_CLIENT_SECRET }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      - run: npm run report # reads from the DB only, writes reports/latest.html
+      - run: npm run report # reads from the DB only, writes reports/index.html
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
       - uses: actions/upload-pages-artifact@v3
