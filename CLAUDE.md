@@ -134,7 +134,14 @@ sista steg"). [Uppdatera den här raden manuellt allt eftersom.]
     `index.html` så repo-roten fungerar direkt, ingen `/index.html`-
     suffix behövs (bytt från `latest.html` 2026-09-13 av precis den
     anledningen). Kräver `pages: write` + `id-token: write` i
-    workflow-permissions.
+    workflow-permissions. `npm run report` skriver sedan 2026-09-13
+    även `reports/data.lua` bredvid `index.html` (samma
+    `upload-pages-artifact`-steg tar med båda automatiskt, ingen
+    workflow-ändring behövdes) — en Lua-tabell-literal (inte JSON) med
+    samma per-item-data som HTML-rapporten, avsedd för det framtida
+    WoW-addonet som ska läsa den via ett schemalagt Windows-jobb, inte
+    över nätverket från spelet. Källa: samma `gatherItemData()`-anrop
+    som HTML:en, så de två filerna kan aldrig gå isär.
     OBS — engångssteg som bara kan göras i webb-UI:t, inte via kod: Pages
     måste vara påslaget i Settings → Pages → "Build and deployment" →
     källa "GitHub Actions" (inte "Deploy from a branch") innan första

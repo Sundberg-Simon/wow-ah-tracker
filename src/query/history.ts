@@ -58,7 +58,7 @@ export async function getItemHistory(
     connectedRealmId: r.connected_realm_id,
     realmNames: r.realm_names,
     minPriceCopper: Number(r.min_price_copper),
-    quantity: r.quantity,
+    quantity: Number(r.quantity),
     listingCount: r.listing_count,
   }));
 }
@@ -142,7 +142,7 @@ export async function getLatestPerRealmPrices(
       connectedRealmId: r.connected_realm_id,
       realmNames: r.realm_names,
       minPriceCopper: Number(r.min_price_copper),
-      quantity: r.quantity,
+      quantity: Number(r.quantity),
       listingCount: r.listing_count,
     })),
   };

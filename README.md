@@ -61,6 +61,14 @@ before it's synced to Pages, or running against a different DB) - it writes
 the same self-contained `reports/index.html` locally (no server, no
 external assets, gitignored since it's generated output).
 
+Alongside `index.html`, the same command also writes `reports/data.lua` -
+a machine-readable export of the same data (per active item: id, name,
+category, EU-wide min/median price, per-realm breakdown) as a Lua table
+literal (`WowAhTrackerData`), not JSON, since that's what a future WoW
+addon can load directly. It's published to the same Pages URL alongside
+the HTML (e.g. `.../wow-ah-tracker/data.lua`). This is just the data
+export - the addon itself doesn't exist yet.
+
 ## Scheduling
 
 `.github/workflows/sync.yml` runs `npm run sync` every 15 minutes via GitHub
