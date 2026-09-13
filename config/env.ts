@@ -8,9 +8,16 @@ function required(name: string): string {
   return value;
 }
 
+// Validation is lazy (getters) rather than eager: a DB-only script like
+// migrate.ts imports this module via pool.ts but never touches the Blizzard
+// fields, and shouldn't need Blizzard credentials set just to run.
 export const env = {
-  blizzardClientId: required("BLIZZARD_CLIENT_ID"),
-  blizzardClientSecret: required("BLIZZARD_CLIENT_SECRET"),
+  get blizzardClientId() {
+    return required("BLIZZARD_CLIENT_ID");
+  },
+  get blizzardClientSecret() {
+    return required("BLIZZARD_CLIENT_SECRET");
+  },
   region: process.env.BLIZZARD_REGION ?? "eu",
   databaseUrl: process.env.DATABASE_URL,
 };
