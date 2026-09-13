@@ -1,0 +1,25 @@
+name: Sync EU auction prices
+
+on:
+  schedule:
+    # Blizzard's own AH data only refreshes roughly hourly - no point polling faster.
+    - cron: "5 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm run migrate
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      - run: npm run sync
+        env:
+          BLIZZARD_CLIENT_ID: ${{ secrets.BLIZZARD_CLIENT_ID }}
+          BLIZZARD_CLIENT_SECRET: ${{ secrets.BLIZZARD_CLIENT_SECRET }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}

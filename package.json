@@ -1,0 +1,24 @@
+{
+  "name": "wow-ah-tracker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted EU WoW auction house price tracker for a fixed list of items.",
+  "type": "module",
+  "scripts": {
+    "sync": "tsx scripts/runSyncOnce.ts",
+    "milestone1": "tsx scripts/milestone1.ts",
+    "migrate": "tsx scripts/migrate.ts",
+    "query": "tsx scripts/queryHistory.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "pg": "^8.12.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.0",
+    "@types/pg": "^8.11.6",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
