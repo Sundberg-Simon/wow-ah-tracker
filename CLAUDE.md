@@ -142,6 +142,12 @@ sista steg"). [Uppdatera den här raden manuellt allt eftersom.]
     WoW-addonet som ska läsa den via ett schemalagt Windows-jobb, inte
     över nätverket från spelet. Källa: samma `gatherItemData()`-anrop
     som HTML:en, så de två filerna kan aldrig gå isär.
+    `WowAhTrackerData.connectedRealms` (tillagd 2026-09-13) listar
+    *alla* EU connected-realm-ID:n + medlemsnamn oavsett aktiva
+    listningar just nu (från `connected_realms`-tabellen, inte
+    per-item `realms`-listan) — krävs för att addonet ska kunna mappa
+    `GetRealmName()` till en grupp även när ingen bevakad vara har
+    listningar på spelarens realm just då.
     OBS — engångssteg som bara kan göras i webb-UI:t, inte via kod: Pages
     måste vara påslaget i Settings → Pages → "Build and deployment" →
     källa "GitHub Actions" (inte "Deploy from a branch") innan första
