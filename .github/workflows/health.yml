@@ -1,0 +1,22 @@
+name: Sync health check
+
+on:
+  schedule:
+    # Three times a day so at least one tick survives GitHub's drop rate.
+    - cron: "20 6,14,22 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run health
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}

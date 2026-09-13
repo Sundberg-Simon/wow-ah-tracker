@@ -17,12 +17,16 @@ CREATE TABLE IF NOT EXISTS price_snapshots (
   connected_realm_id INTEGER REFERENCES connected_realms(connected_realm_id),
   captured_at TIMESTAMPTZ NOT NULL,
   min_price_copper BIGINT NOT NULL,
-  quantity INTEGER NOT NULL,
+  quantity BIGINT NOT NULL,
   listing_count INTEGER NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS price_snapshots_item_realm_time_idx
   ON price_snapshots (item_id, connected_realm_id, captured_at DESC);
+
+-- Commodity rows are EU-wide totals; popular mats can reach the millions.
+-- Re-running this on an already-BIGINT column is a harmless no-op.
+ALTER TABLE price_snapshots ALTER COLUMN quantity TYPE BIGINT;
 
 -- Tracks each sync attempt so the job can self-throttle: GitHub Actions'
 -- cron scheduler drops ticks unpredictably on low-activity repos (confirmed
@@ -40,3 +44,27 @@ CREATE TABLE IF NOT EXISTS sync_runs (
 
 CREATE INDEX IF NOT EXISTS sync_runs_success_started_idx
   ON sync_runs (success, started_at DESC);
+
+-- Tie every snapshot row to the run that produced it, so partial/failed runs
+-- can be identified and filtered by the query layer.
+ALTER TABLE price_snapshots
+  ADD COLUMN IF NOT EXISTS sync_run_id BIGINT REFERENCES sync_runs(id);
+
+ALTER TABLE sync_runs
+  ADD COLUMN IF NOT EXISTS realms_expected INTEGER,
+  ADD COLUMN IF NOT EXISTS realms_ok INTEGER,
+  ADD COLUMN IF NOT EXISTS failed_realm_ids INTEGER[] NOT NULL DEFAULT '{}',
+  ADD COLUMN IF NOT EXISTS partial BOOLEAN NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS gap_minutes INTEGER,
+  ADD COLUMN IF NOT EXISTS source_modified_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS error TEXT;
+
+-- True idempotency key: one observation per item per realm per run.
+-- COALESCE because connected_realm_id is NULL for commodities and Postgres
+-- treats NULLs as distinct in plain UNIQUE constraints. 0 is never a real id.
+CREATE UNIQUE INDEX IF NOT EXISTS price_snapshots_run_item_realm_uidx
+  ON price_snapshots (sync_run_id, item_id, COALESCE(connected_realm_id, 0));
+
+ALTER TABLE connected_realms
+  ADD COLUMN IF NOT EXISTS first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ADD COLUMN IF NOT EXISTS names_changed_at TIMESTAMPTZ;

@@ -1,4 +1,4 @@
-import { blizzardGet } from "../blizzard-api/client.js";
+import { blizzardGet, blizzardGetWithMeta } from "../blizzard-api/client.js";
 import type { AuctionsResponse, CommoditiesResponse } from "../blizzard-api/types.js";
 
 export interface PriceObservation {
@@ -51,9 +51,24 @@ export async function fetchTrackedAuctionsForRealm(
     { namespace: "dynamic" },
   );
 
+  // An EU connected realm never legitimately has zero itemized auctions; an
+  // empty list means Blizzard's dump for that realm is mid-regeneration or
+  // the realm is in maintenance. Treat it as a fetch failure so the run
+  // flags it instead of silently storing "no listings" as real data.
+  if (data.auctions.length === 0) {
+    throw new Error(`Connected realm ${connectedRealmId} returned an empty auction dump`);
+  }
+
   const matching = data.auctions
-    .filter((a) => trackedItemIds.has(a.item.id) && typeof a.buyout === "number")
-    .map((a) => ({ itemId: a.item.id, price: a.buyout as number, quantity: a.quantity }));
+    .filter((a) => trackedItemIds.has(a.item.id) && typeof a.buyout === "number" && a.quantity > 0)
+    // buyout is the price for the whole listing (stack), not per unit - store
+    // per-unit so stacks of different sizes are comparable to each other and
+    // to commodities' unit_price.
+    .map((a) => ({
+      itemId: a.item.id,
+      price: Math.floor((a.buyout as number) / a.quantity),
+      quantity: a.quantity,
+    }));
 
   const aggregated = aggregateByItem(matching);
 
@@ -68,13 +83,16 @@ export async function fetchTrackedAuctionsForRealm(
  * Fetches the FULL region-wide commodities dump (stackable items like
  * crafting mats - shared across all of EU, not per-realm) and reduces it
  * down to tracked item IDs. Only needs to be called once per sync run.
+ * lastModified reflects Blizzard's own generation time for the dump - a
+ * useful signal for detecting a stalled/unchanged source across runs.
  */
 export async function fetchTrackedCommodities(
   trackedItemIds: Set<number>,
-): Promise<PriceObservation[]> {
-  const data = await blizzardGet<CommoditiesResponse>("/data/wow/auctions/commodities", {
-    namespace: "dynamic",
-  });
+): Promise<{ observations: PriceObservation[]; lastModified: Date | null }> {
+  const { data, lastModified } = await blizzardGetWithMeta<CommoditiesResponse>(
+    "/data/wow/auctions/commodities",
+    { namespace: "dynamic" },
+  );
 
   const matching = data.auctions
     .filter((c) => trackedItemIds.has(c.item.id))
@@ -82,9 +100,11 @@ export async function fetchTrackedCommodities(
 
   const aggregated = aggregateByItem(matching);
 
-  return [...aggregated.entries()].map(([itemId, agg]) => ({
+  const observations = [...aggregated.entries()].map(([itemId, agg]) => ({
     itemId,
     connectedRealmId: null,
     ...agg,
   }));
+
+  return { observations, lastModified };
 }

@@ -50,7 +50,7 @@ async function main() {
   }
 
   console.log("\n5. Fetching region-wide commodities dump (for any tracked commodity items)...");
-  const commodityObservations = await fetchTrackedCommodities(trackedIds);
+  const { observations: commodityObservations } = await fetchTrackedCommodities(trackedIds);
   console.log(`   Matched ${commodityObservations.length} tracked commodity item(s) EU-wide:`);
   for (const obs of commodityObservations) {
     console.log(

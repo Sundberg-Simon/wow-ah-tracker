@@ -12,15 +12,22 @@ interface GetOptions {
   params?: Record<string, string>;
 }
 
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+const MAX_ATTEMPTS = 3;
+const TIMEOUT_MS = 90_000;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
- * GET a Game Data API path and parse it as JSON. Retries once on 429 after
- * respecting Retry-After, since a scheduled hourly job has no reason to fail
- * a whole run over a single transient rate-limit hiccup.
+ * GET a Game Data API path, retrying on 429/5xx/network errors (exponential
+ * backoff, respecting Retry-After when present) and timing out a hung
+ * request rather than letting it stall the whole sync run. Exposes
+ * Last-Modified so callers can detect a stalled/unchanged Blizzard dump.
  */
-export async function blizzardGet<T>(
+export async function blizzardGetWithMeta<T>(
   path: string,
   { namespace, locale = "en_GB", params = {} }: GetOptions,
-): Promise<T> {
+): Promise<{ data: T; lastModified: Date | null }> {
   const token = await getAccessToken();
 
   const url = new URL(`${API_HOST}${path}`);
@@ -30,21 +37,47 @@ export async function blizzardGet<T>(
     url.searchParams.set(key, value);
   }
 
-  const doFetch = () =>
-    fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      });
+    } catch (err) {
+      // AbortError (timeout) and plain network failures - retryable, same
+      // backoff as a 5xx.
+      lastError = err;
+      if (attempt === MAX_ATTEMPTS) break;
+      await sleep(2000 * 2 ** (attempt - 1));
+      continue;
+    }
 
-  let response = await doFetch();
+    if (response.ok) {
+      const lastModifiedHeader = response.headers.get("last-modified");
+      return {
+        data: (await response.json()) as T,
+        lastModified: lastModifiedHeader ? new Date(lastModifiedHeader) : null,
+      };
+    }
 
-  if (response.status === 429) {
-    const retryAfterSeconds = Number(response.headers.get("retry-after") ?? "5");
-    await new Promise((resolve) => setTimeout(resolve, retryAfterSeconds * 1000));
-    response = await doFetch();
+    const body = await response.text().catch(() => "");
+    const httpError = new Error(
+      `GET ${url.pathname} failed (${response.status}): ${body.slice(0, 200)}`,
+    );
+    // Not worth retrying a 4xx (bad auth, bad path, etc.) - fail fast.
+    if (!RETRYABLE_STATUS.has(response.status)) throw httpError;
+
+    lastError = httpError;
+    if (attempt === MAX_ATTEMPTS) break;
+    const retryAfterMs = Number(response.headers.get("retry-after") ?? 0) * 1000;
+    await sleep(Math.max(retryAfterMs, 2000 * 2 ** (attempt - 1)));
   }
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`GET ${url} failed (${response.status}): ${body}`);
-  }
+  throw lastError;
+}
 
-  return response.json() as Promise<T>;
+export async function blizzardGet<T>(path: string, options: GetOptions): Promise<T> {
+  return (await blizzardGetWithMeta<T>(path, options)).data;
 }

@@ -7,5 +7,8 @@ if (!env.databaseUrl) {
 
 export const pool = new pg.Pool({
   connectionString: env.databaseUrl,
-  ssl: env.databaseUrl.includes("sslmode=require") ? { rejectUnauthorized: false } : undefined,
+  // Neon uses publicly-trusted certificates, so full verification works
+  // (rejectUnauthorized: false would encrypt the connection without
+  // actually authenticating the server).
+  ssl: env.databaseUrl.includes("sslmode=require") ? { rejectUnauthorized: true } : undefined,
 });

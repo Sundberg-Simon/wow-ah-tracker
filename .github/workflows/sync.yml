@@ -9,19 +9,25 @@ on:
     - cron: "*/15 * * * *"
   workflow_dispatch: {}
 
+# Never two sync runs at once. Without this, a delayed tick and the next
+# on-time tick could run in parallel, both pass the self-throttle (it isn't
+# atomic against a concurrent process) and write two near-identical snapshots.
+concurrency:
+  group: sync
+  cancel-in-progress: false
+
 jobs:
   sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 20 # a hung run shouldn't eat hours of the Actions quota
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
       - run: npm ci
-      - run: npm run migrate
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      - run: npm run sync
+      - run: npm run sync # applies schema + syncs in one process, see scripts/runSyncOnce.ts
         env:
           BLIZZARD_CLIENT_ID: ${{ secrets.BLIZZARD_CLIENT_ID }}
           BLIZZARD_CLIENT_SECRET: ${{ secrets.BLIZZARD_CLIENT_SECRET }}

@@ -1,5 +1,15 @@
 import { pool } from "../db/pool.js";
 
+// Only aggregate rows from complete runs: a partial or failed run still
+// commits whatever realms it did finish (see runFullSync's commitRun), so
+// without this filter a partial hour would look like a full one with
+// artificially low quantity/price. Legacy rows predate the sync_run_id
+// column (NULL) and are assumed complete since they were written before
+// partial-run support existed.
+const COMPLETE_RUN_CONDITION = `(ps.sync_run_id IS NULL OR EXISTS (
+    SELECT 1 FROM sync_runs sr WHERE sr.id = ps.sync_run_id AND sr.success AND NOT sr.partial
+  ))`;
+
 export interface HistoryRow {
   capturedAt: Date;
   connectedRealmId: number | null;
@@ -18,7 +28,7 @@ export async function getItemHistory(
   itemId: number,
   options: { connectedRealmId?: number | null; since?: Date; limit?: number } = {},
 ): Promise<HistoryRow[]> {
-  const conditions: string[] = ["ps.item_id = $1"];
+  const conditions: string[] = ["ps.item_id = $1", COMPLETE_RUN_CONDITION];
   const values: unknown[] = [itemId];
 
   if (options.connectedRealmId !== undefined) {
@@ -62,22 +72,22 @@ export async function getEuWideHistory(
   itemId: number,
   options: { since?: Date; limit?: number } = {},
 ): Promise<{ capturedAt: Date; minPriceCopper: number; totalQuantity: number }[]> {
-  const conditions: string[] = ["item_id = $1"];
+  const conditions: string[] = ["ps.item_id = $1", COMPLETE_RUN_CONDITION];
   const values: unknown[] = [itemId];
 
   if (options.since) {
     values.push(options.since);
-    conditions.push(`captured_at >= $${values.length}`);
+    conditions.push(`ps.captured_at >= $${values.length}`);
   }
 
   const limit = options.limit ?? 500;
 
   const { rows } = await pool.query(
-    `SELECT captured_at, MIN(min_price_copper) AS min_price_copper, SUM(quantity) AS total_quantity
-     FROM price_snapshots
+    `SELECT ps.captured_at, MIN(ps.min_price_copper) AS min_price_copper, SUM(ps.quantity) AS total_quantity
+     FROM price_snapshots ps
      WHERE ${conditions.join(" AND ")}
-     GROUP BY captured_at
-     ORDER BY captured_at DESC
+     GROUP BY ps.captured_at
+     ORDER BY ps.captured_at DESC
      LIMIT ${limit}`,
     values,
   );
@@ -106,7 +116,9 @@ export async function getLatestPerRealmPrices(
   itemId: number,
 ): Promise<{ capturedAt: Date | null; rows: LatestRealmPrice[] }> {
   const { rows: latest } = await pool.query(
-    `SELECT MAX(captured_at) AS captured_at FROM price_snapshots WHERE item_id = $1`,
+    `SELECT MAX(ps.captured_at) AS captured_at
+     FROM price_snapshots ps
+     WHERE ps.item_id = $1 AND ${COMPLETE_RUN_CONDITION}`,
     [itemId],
   );
   const capturedAt: Date | null = latest[0]?.captured_at ?? null;
@@ -119,7 +131,7 @@ export async function getLatestPerRealmPrices(
             ps.min_price_copper, ps.quantity, ps.listing_count
      FROM price_snapshots ps
      LEFT JOIN connected_realms cr ON cr.connected_realm_id = ps.connected_realm_id
-     WHERE ps.item_id = $1 AND ps.captured_at = $2
+     WHERE ps.item_id = $1 AND ps.captured_at = $2 AND ${COMPLETE_RUN_CONDITION}
      ORDER BY ps.min_price_copper ASC`,
     [itemId, capturedAt],
   );

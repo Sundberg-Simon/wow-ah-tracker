@@ -10,6 +10,7 @@
     "migrate": "tsx scripts/migrate.ts",
     "query": "tsx scripts/queryHistory.ts",
     "report": "tsx scripts/report.ts",
+    "health": "tsx scripts/healthCheck.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
