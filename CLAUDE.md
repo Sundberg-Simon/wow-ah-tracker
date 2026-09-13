@@ -7,10 +7,16 @@ En självbyggd, nedskalad ersättare till undermine.exchange, sedan den
 tjänsten gick över till en betalversion.
 
 ## Nuvarande fas
-Milestone 1 och 2 klara och verifierade mot skarp data. Projektet är live:
-privat GitHub-repo, hourly GitHub Actions-workflow bekräftad fungerande
-end-to-end (ett schemalagt pass har skrivit en riktig rad i DB:n),
-secrets konfigurerade. [Uppdatera den här raden manuellt allt eftersom.]
+Milestone 1 och 2 klara och verifierade mot skarp data. Läslagret (v1) är
+byggt: `npm run report` skriver en lokal, självständig HTML-rapport
+(nuvarande pris/kvantitet per realm, regionalt min/median, pristrend) —
+ingen hosting, ingen webbapp. Projektet är live: privat GitHub-repo,
+GitHub Actions-workflow kör var 15:e minut med en 55-minuters
+självspärr i syncjobbet (se arkitekturbeslut #7) eftersom GitHub Actions
+cron visat sig tappa tick:ar opålitligt på det här repot. Secrets
+konfigurerade. Väntar fortfarande in 2-3h verifiering av att
+självspärren faktiskt no-opar dubbletter i skarp drift (se "Obligatoriskt
+sista steg"). [Uppdatera den här raden manuellt allt eftersom.]
 
 ## Teknikstack — håll dig till detta, föreslå inte alternativ utan att fråga
 - Språk/runtime: TypeScript / Node.js (sync-jobb + query-helpers)
@@ -51,6 +57,24 @@ secrets konfigurerade. [Uppdatera den här raden manuellt allt eftersom.]
    gör en framtida nettoberäkning (se "Medvetet uppskjutet" nedan) enkel:
    summa sälj-transaktioner minus summa köp-transaktioner, utan behov av
    att värdera råvaror eller crafting-kostnad.
+7. **Schemat kör var 15:e minut, med en tidsbaserad självspärr i
+   syncjobbet — inte en gång i timmen rakt av.** Grundorsaken är
+   utredd och bekräftad (via `gh run view <id> --json
+   createdAt,startedAt` på flera schemalagda körningar: createdAt ==
+   startedAt varje gång, dvs ingen runner-könsfördröjning — GitHub
+   Actions cron-scheduler tappar helt enkelt tick:ar opålitligt på
+   låg-aktivitetsrepon som det här, bekräftat genom att t.ex. 14:05/
+   15:05/16:05 saknades helt ur körningshistoriken). Det här är inte
+   en öppen fråga att ifrågasätta eller "optimera" senare — föreslå
+   inte att gå tillbaka till en enkel timmes-cron. Implementationen:
+   workflow-cronen är `*/15 * * * *` (fyra chanser i timmen), och
+   `runFullSync()` i `src/sync/runFullSync.ts` slår upp senaste
+   *lyckade* körning i `sync_runs`-tabellen innan den gör några
+   Blizzard API-anrop — är det mindre än 55 minuter sedan, avslutas
+   jobbet direkt (exit 0, inga API-anrop, inga DB-skrivningar utöver
+   själva uppslaget). En körning som startar men kraschar lämnas som
+   `success = false` så nästa tick får försöka igen utan att vänta ut
+   hela 55-minutersfönstret.
 
 ## Vad som är byggt och verifierat hittills
 - **Milestone 1**: OAuth-token, connected-realm-upplösning, per-realm-
@@ -91,6 +115,13 @@ secrets konfigurerade. [Uppdatera den här raden manuellt allt eftersom.]
   sälj) sida vid sida istället för att välja en enda "bästa"-mätvariabel.
 
 ## Obligatoriskt sista steg — innan du säger att något är klart att testa
-[Fyll i det här när det finns en tydlig verifieringsrutin — t.ex. "kolla
-att GitHub Actions-körningen faktiskt lyckades i Actions-fliken, inte
-bara att pushen gick igenom" eller motsvarande för den här projekttypen.]
+Kolla i Actions-fliken (eller `gh run list`/`gh run view`) att körningen
+faktiskt lyckades, inte bara att den triggades eller att en push gick
+igenom. Och specifikt vid ändringar av schemat/självspärren: kör
+`gh run list --workflow=sync.yml --limit 20` några timmar senare och
+bekräfta att självspärren faktiskt hoppar över dubbletter — två
+körningar inom samma 55-minutersfönster ska bara resultera i EN
+faktisk sync (API-anrop + DB-skrivningar); den andra ska synas som en
+snabb no-op i loggen ("Skipping sync: last successful run was Xmin
+ago"), inte som ännu en full körning. Att cronen nu går oftare bevisar
+inget i sig — det är no-op-skippet som måste verifieras i skarp drift.
