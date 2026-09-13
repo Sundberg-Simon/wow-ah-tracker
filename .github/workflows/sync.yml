@@ -2,8 +2,11 @@ name: Sync EU auction prices
 
 on:
   schedule:
-    # Blizzard's own AH data only refreshes roughly hourly - no point polling faster.
-    - cron: "5 * * * *"
+    # GitHub Actions' cron scheduler drops ticks unpredictably on this repo
+    # (confirmed via createdAt gaps in run history - not runner queue delay).
+    # Running every 15 min gives 4 chances/hour so a dropped tick doesn't
+    # matter; runFullSync() self-throttles to stay near-hourly regardless.
+    - cron: "*/15 * * * *"
   workflow_dispatch: {}
 
 jobs:
