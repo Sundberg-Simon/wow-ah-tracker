@@ -239,6 +239,31 @@ eftersom.]
   (färsk, från denna körning) mot per-item `capturedAt` (26 min äldre,
   den faktiska senaste riktiga synken), exakt den distinktion skriptet
   är byggt för att aldrig blanda ihop.
+  **Uppdaterad 2026-09-14: knappen tvingar nu alltid fram en riktig
+  hämtning.** Simon ville ha genuint färska priser varje gång han
+  trycker, även om Blizzards API hunnit tickat om bara några minuter
+  efter senaste synk — API-lasten (~93 anrop/körning) är trivial även
+  vid flera tryck i timmen. `runFullSync(force)`: när `true` hoppas
+  55-minuters-spärren över helt (loggar explicit "Forced sync via
+  manual trigger - bypassing self-throttle"). `sync.yml` har ett typat
+  `workflow_dispatch`-input (`force`, default `false`) som trådas
+  igenom som `FORCE_SYNC` via `github.event.inputs.force || 'false'`
+  — `|| 'false'` krävs eftersom `github.event.inputs` inte existerar
+  alls på en schemalagd körning. `SyncNow.ps1` dispatchar med
+  `-f force=true`; bakgrunds-`*/15`-schemat och en eventuell extern
+  pinger (se docs/external-pinger-setup.md om den sätts upp) fortsätter
+  respektera spärren precis som förut — bara den manuella vägen ändrades.
+  Det gör också att skriptets "success, data.lua updated"-meddelande nu
+  alltid stämmer (en forcerad körning garanterar en riktig hämtning) —
+  ingen separat "ärlig meddelande-hantering" för det självspärrade
+  fallet behövs längre för just den här knappen.
+  Verifierat i skarp CI, inte bara lokalt: två forcerade körningar ~6
+  min isär gav båda "Forced sync..." i loggen och `captured_at` som
+  faktiskt gick framåt (19:45:52 → 19:51:32) — inte bara `generatedAt`.
+  En efterföljande dispatch utan `force` (simulerar en vanlig
+  schemalagd tick) hoppade korrekt över synken ("last successful run
+  was 2min ago"), vilket bekräftar att default-`false` fungerar även
+  när inputet saknas helt, inte bara när det är explicit `false`.
   **Låst lärdom, gäller allt framtida AH-UI-arbete i addonet**: anropa
   ALDRIG `C_AuctionHouse.SendSearchQuery`/`SendBrowseQuery` direkt.
   Hittades i skarp in-game-testning (v1: `/waht search` skrev ut
