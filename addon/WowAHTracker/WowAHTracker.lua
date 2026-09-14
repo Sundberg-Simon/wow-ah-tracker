@@ -153,29 +153,33 @@ local function searchAuctionHouse(query)
 	end
 
 	local needle = query:lower()
-	local matchId, matchName
-	for itemId, item in pairs(WowAhTrackerData.items) do
+	local matchName
+	for _, item in pairs(WowAhTrackerData.items) do
 		if item.name and item.name:lower():find(needle, 1, true) then
-			matchId, matchName = tonumber(itemId), item.name
+			matchName = item.name
 			break
 		end
 	end
 
-	if not matchId then
+	if not matchName then
 		printMsg(string.format('No tracked item matches "%s".', query))
 		return
 	end
 
-	-- Assumes the item is listed under its own item id, as both current
-	-- placeholder items are. A cageable battle pet would need
-	-- MakeItemKey(itemID, nil, nil, battlePetSpeciesID) instead - not
-	-- handled yet since no tracked item currently needs it (see CLAUDE.md).
-	local itemKey = C_AuctionHouse.MakeItemKey(matchId)
-	-- Empty sorts = let the AH use its own default order. A specific sort
-	-- enum member wasn't worth guessing at and risking a bad reference here
-	-- (these can shift between patches) when the default is good enough for
-	-- v1 - can be tuned later once this command has actually been tested.
-	C_AuctionHouse.SendSearchQuery(itemKey, {}, true)
+	-- Drive the actual search bar (SetSearchText + StartSearch), the same
+	-- two calls the search box's own OnEnterPressed handler makes - do NOT
+	-- call C_AuctionHouse.SendSearchQuery/SendBrowseQuery directly. That API
+	-- technically fires the query and gets a real server response, but
+	-- AuctionHouseFrame tracks its own "current search" state and only
+	-- renders results it recognizes as belonging to that state; bypassing
+	-- the search bar leaves the results list empty even though the query
+	-- succeeded - confirmed via in-game testing, then verified against
+	-- Blizzard's own client UI source (AuctionHouseSearchBarMixin:StartSearch
+	-- in Blizzard_AuctionHouseSearchBar.lua), which itself calls
+	-- AuctionHouseFrame:SendBrowseQuery(), never the C_AuctionHouse API
+	-- directly.
+	AuctionHouseFrame.SearchBar:SetSearchText(matchName)
+	AuctionHouseFrame.SearchBar:StartSearch()
 	printMsg(string.format("Searching the Auction House for %s...", matchName))
 end
 
