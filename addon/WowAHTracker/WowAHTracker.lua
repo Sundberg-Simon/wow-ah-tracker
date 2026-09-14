@@ -171,8 +171,11 @@ local function searchAuctionHouse(query)
 	-- MakeItemKey(itemID, nil, nil, battlePetSpeciesID) instead - not
 	-- handled yet since no tracked item currently needs it (see CLAUDE.md).
 	local itemKey = C_AuctionHouse.MakeItemKey(matchId)
-	local sorts = { { sortOrder = Enum.AuctionHouseSortOrder.Buyout, reversed = false } }
-	C_AuctionHouse.SendSearchQuery(itemKey, sorts, true)
+	-- Empty sorts = let the AH use its own default order. A specific sort
+	-- enum member wasn't worth guessing at and risking a bad reference here
+	-- (these can shift between patches) when the default is good enough for
+	-- v1 - can be tuned later once this command has actually been tested.
+	C_AuctionHouse.SendSearchQuery(itemKey, {}, true)
 	printMsg(string.format("Searching the Auction House for %s...", matchName))
 end
 
