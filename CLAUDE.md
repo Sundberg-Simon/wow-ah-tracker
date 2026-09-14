@@ -182,11 +182,13 @@ eftersom.]
   och jämför mot spelarens egen connected-realm-grupp (matchad via
   `GetRealmName()`, normaliserad för att stryka mellanslag på samma
   sätt som WoW:s API gör). `/waht` upprepar sammanfattningen; `/waht
-  search <namn>` slår upp ett bevakat item och kör
-  `C_AuctionHouse.SendSearchQuery` via `MakeItemKey` — kollar explicit
-  att AH-fönstret är öppet innan anropet, annars ett tydligt
-  felmeddelande istället för ett tyst no-op. Allt hanterar saknad/nil
-  `WowAhTrackerData` utan Lua-fel.
+  search <namn>` slår upp ett bevakat item och driver
+  `AuctionHouseFrame.SearchBar:SetSearchText()` + `:StartSearch()`
+  (se "Låst lärdom" nedan för varför — ALDRIG en rak
+  C_AuctionHouse-anrop) — kollar explicit att AH-fönstret är öppet
+  innan anropet, annars ett tydligt felmeddelande istället för ett
+  tyst no-op. Allt hanterar saknad/nil `WowAhTrackerData` utan
+  Lua-fel.
   `scripts/windows/Fetch-DataLua.ps1` hämtar `data.lua` från Pages-URL:en
   till en temp-fil, validerar att den innehåller `WowAhTrackerData = {`
   nära toppen och inte ser ut som en HTML-felsida, och ersätter först då

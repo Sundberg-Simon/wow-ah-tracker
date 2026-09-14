@@ -13,6 +13,19 @@ const MIN_SUCCESSFUL_RUNS = 18; // 24 expected at ~hourly; tolerate a few droppe
 const MAX_GAP_MINUTES = 180;
 const MAX_STALE_SOURCE_RUNS = 3; // same Blizzard Last-Modified N runs in a row
 
+// Must mirror runFullSync.ts's own MAX_FAILED_REALM_FRACTION (0.1): a run
+// under that ceiling is marked partial but is, by the sync job's own
+// design, NOT a failure - a single flaky realm out of ~90 is expected and
+// tolerated on purpose. Alarming on every partial run here would defeat
+// that tolerance and just generate noise on ordinary Blizzard-side hiccups
+// (see docs/sync-pipeline-review-2026-09-14.md, findings 1+2). Instead,
+// only alarm when a run's failure rate is closing in on the real ceiling,
+// or when partial runs are happening on most recent runs (systemic)
+// rather than the occasional one-off.
+const MAX_FAILED_REALM_FRACTION = 0.1;
+const NEAR_CEILING_FRACTION = 0.8; // alarm once a run reaches 80% of the ceiling
+const SYSTEMIC_PARTIAL_RATE = 0.5; // alarm if over half of successful runs are partial
+
 async function main() {
   const { rows } = await pool.query(`
     WITH recent AS (
@@ -28,6 +41,11 @@ async function main() {
       (SELECT count(*) FROM recent WHERE success)                          AS successful,
       (SELECT count(*) FROM recent WHERE NOT success)                      AS failed,
       (SELECT count(*) FROM recent WHERE partial)                          AS partial,
+      (SELECT coalesce(max(
+         CASE WHEN realms_expected > 0
+              THEN (realms_expected - realms_ok)::float / realms_expected
+              ELSE 0 END
+       ), 0) FROM recent WHERE success)                                    AS max_failure_fraction,
       (SELECT coalesce(max(extract(epoch FROM gap)/60), 0) FROM gaps)      AS max_gap_min,
       (SELECT extract(epoch FROM now() - max(started_at))/60
          FROM recent WHERE success)                                        AS since_last_min,
@@ -50,8 +68,21 @@ async function main() {
   if (s.since_last_min === null || Number(s.since_last_min) > MAX_GAP_MINUTES) {
     problems.push(`last successful run ${Math.round(s.since_last_min ?? 9999)}min ago`);
   }
-  if (Number(s.partial) > 0) {
-    problems.push(`${s.partial} partial run(s) - check failed_realm_ids`);
+  const successful = Number(s.successful);
+  const partial = Number(s.partial);
+  const maxFailureFraction = Number(s.max_failure_fraction);
+  const nearCeiling = MAX_FAILED_REALM_FRACTION * NEAR_CEILING_FRACTION;
+
+  if (maxFailureFraction >= nearCeiling) {
+    problems.push(
+      `a run's failed-realm fraction (${(maxFailureFraction * 100).toFixed(1)}%) is close to the ` +
+        `${(MAX_FAILED_REALM_FRACTION * 100).toFixed(0)}% tolerance ceiling - check failed_realm_ids`,
+    );
+  }
+  if (successful > 0 && partial / successful > SYSTEMIC_PARTIAL_RATE) {
+    problems.push(
+      `${partial}/${successful} successful runs in ${WINDOW_HOURS}h were partial - looks systemic, not occasional`,
+    );
   }
   if (Number(s.stale_source) > 0) {
     problems.push(`Blizzard dump unchanged for the last ${MAX_STALE_SOURCE_RUNS} runs`);

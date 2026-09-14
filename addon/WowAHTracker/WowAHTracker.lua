@@ -134,10 +134,10 @@ local function printSummary()
 	end
 end
 
--- C_AuctionHouse.SendSearchQuery only works while the Auction House window
--- is open - calling it otherwise silently does nothing useful (no error,
--- no results), which reads as the addon being broken. Check visibility
--- ourselves and say so plainly instead.
+-- AuctionHouseFrame.SearchBar only exists/works while the Auction House
+-- window is open - driving it otherwise silently does nothing useful (no
+-- error, no results), which reads as the addon being broken. Check
+-- visibility ourselves and say so plainly instead.
 local function searchAuctionHouse(query)
 	if not query or query == "" then
 		printMsg("Usage: /waht search <item name>")
