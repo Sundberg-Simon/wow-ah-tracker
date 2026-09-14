@@ -4,3 +4,4 @@ dist/
 *.sqlite
 *.log
 /reports/
+/.claude/
