@@ -26,10 +26,12 @@ CI. Secrets konfigurerade. Väntar fortfarande in 2-3h verifiering av
 självspärren i naturlig (icke-manuellt-triggad) drift, samt att
 health-checken går grön i skarpt schemalagt läge (se "Obligatoriskt
 sista steg"). WoW-addonet (v1: prisalert vid login, `/waht`,
-`/waht search`) och det schemalagda Windows-hämtningsjobbet är byggda
-och installerade på den här maskinen — men eftersom det är spelkod, inte
-CI, återstår manuell in-game-verifiering av spelaren själv innan det kan
-kallas klart. [Uppdatera den här raden manuellt allt eftersom.]
+`/waht search`) och det schemalagda Windows-hämtningsjobbet är byggda,
+installerade och in-game-verifierade av spelaren (2026-09-14) — inklusive
+en riktig bugg som bara syntes i skarp testning (`/waht search`
+uppdaterade aldrig AH-resultatlistan; fixad, se arkitekturbeslut/lärdom
+i sektionen om addonet nedan). [Uppdatera den här raden manuellt allt
+eftersom.]
 
 ## Teknikstack — håll dig till detta, föreslå inte alternativ utan att fråga
 - Språk/runtime: TypeScript / Node.js (sync-jobb + query-helpers)
