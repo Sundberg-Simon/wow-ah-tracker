@@ -207,6 +207,22 @@ kallas klart. [Uppdatera den här raden manuellt allt eftersom.]
   P3650D`), och en riktig körning via `schtasks /run` uppdaterade
   faktiskt `data.lua` (nytt `Last Result: 0`, ny tidsstämpel, ny
   filstorlek) — inte bara att jobbet "finns".
+  **Låst lärdom, gäller allt framtida AH-UI-arbete i addonet**: anropa
+  ALDRIG `C_AuctionHouse.SendSearchQuery`/`SendBrowseQuery` direkt.
+  Hittades i skarp in-game-testning (v1: `/waht search` skrev ut
+  "Searching..." men resultatlistan uppdaterades aldrig) och bekräftades
+  mot Blizzards egen klient-UI-källkod (Gethe/wow-ui-source, live-grenen,
+  inte gissat): `AuctionHouseFrame` håller eget state
+  (`self.activeSearches`) för vilken sökning som är "aktiv", och
+  resultatlistan renderar bara sådant den känner igen som sitt eget.
+  Rätt väg är alltid `AuctionHouseFrame.SearchBar:SetSearchText(text)`
+  följt av `:StartSearch()` — samma två anrop som sökrutans egen
+  `OnEnterPressed`-hanterare gör, vilket i sin tur går via
+  `AuctionHouseFrame:SendBrowseQuery()` (sätter `activeSearches`, byter
+  visningsläge till Buy, triggar rätt event) innan den någonsin rör
+  C_AuctionHouse-API:t. En rak C_AuctionHouse-anrop "lyckas" tekniskt
+  (riktig serverrundtripp, inget fel) men är osynligt för spelaren —
+  precis den sortens bugg som inte syns förrän man testar i spelet.
 
 ## Vad vi medvetet skjuter upp (fråga innan du bygger något av detta)
 - **Favorites-list-integration i addonet**: för bevakade items som är
