@@ -89,6 +89,15 @@ function copperToGold(copper: number): string {
   return (copper / 10000).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+// Emits the real ISO-8601 UTC instant (unambiguous, DST-safe) as both the
+// machine-readable value and the no-JS fallback text; the inline script
+// before </body> swaps the visible text for the viewer's local time. Server
+// stays UTC-only on purpose - no hardcoded timezone, no DST math here.
+function renderTimestamp(date: Date): string {
+  const iso = date.toISOString();
+  return `<time data-iso="${iso}">${iso}</time>`;
+}
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, "&amp;")
@@ -164,7 +173,7 @@ function buildItemSectionHtml(data: ItemData): string {
 
   return `<section class="item">
     <h2>${escapeHtml(data.name)} <span class="muted">(${data.id}, ${data.category})</span></h2>
-    <p class="as-of">As of ${data.capturedAt.toISOString()}</p>
+    <p class="as-of">As of ${renderTimestamp(data.capturedAt)}</p>
     <div class="summary">
       <div><span class="label">Regional min</span><span class="value">${copperToGold(data.euMinCopper)}g</span></div>
       <div><span class="label">Regional median</span><span class="value">${copperToGold(data.euMedianCopper)}g</span></div>
@@ -206,8 +215,16 @@ function buildHtml(items: ItemData[]): string {
 </head>
 <body>
   <h1>wow-ah-tracker</h1>
-  <p class="generated">Generated ${new Date().toISOString()}</p>
+  <p class="generated">Generated ${renderTimestamp(new Date())}</p>
   ${sections}
+  <script>
+    document.querySelectorAll('time[data-iso]').forEach(function (el) {
+      var d = new Date(el.dataset.iso);
+      if (!isNaN(d.getTime())) {
+        el.textContent = d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+      }
+    });
+  </script>
 </body>
 </html>`;
 }
