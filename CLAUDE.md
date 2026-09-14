@@ -211,6 +211,34 @@ eftersom.]
   P3650D`), och en riktig körning via `schtasks /run` uppdaterade
   faktiskt `data.lua` (nytt `Last Result: 0`, ny tidsstämpel, ny
   filstorlek) — inte bara att jobbet "finns".
+- **"Sync now"-genväg** (byggt 2026-09-14): `scripts/windows/SyncNow.ps1`
+  — för precis innan en spelsession, istället för att hoppas att
+  bakgrunds-`*/15`-schemat råkat triggat nyligen. Triggar
+  `gh workflow run sync.yml` (återanvänder samma `gh`-CLI-inloggning som
+  redan finns på maskinen — ingen ny token), hittar den specifika
+  dispatch:ade körningen (matchar på `event=workflow_dispatch` +
+  `createdAt`, så en samtidigt köad schemalagd körning — de kan inte
+  köra parallellt pga `concurrency`-gruppen i `sync.yml` — aldrig
+  förväxlas med vår), pollar tills den körningen är `completed` (inte
+  `data.lua`s `generatedAt` — se fynd 4 i
+  docs/sync-pipeline-review-2026-09-14.md: `generatedAt` puttas vid
+  *varje* körning inklusive självspärrade no-ops, så det skulle rapportera
+  "klart" nästan direkt även när ingen ny prisdata hämtats), kör sedan
+  `Fetch-DataLua.ps1` oavsett `conclusion` (en misslyckad synk lämnar
+  ändå en giltig, redan publicerad `data.lua` att hämta). Timeout 180s
+  med tydligt meddelande, inte oändlig hängning.
+  En `.lnk`-genväg finns på skrivbordet
+  (`WoW AH Tracker - Sync Now.lnk`) — pinning till Aktivitetsfältet är
+  ett manuellt högerklicks-steg, Windows tillåter inte fullt
+  skriptstyrd pinning.
+  Verifierat end-to-end, inte bara att koden ser rimlig ut: en riktig
+  körning triggades (run-ID syns i Actions), självspärrades internt
+  (senaste riktiga synk var 26 min gammal) men rapporterades ändå
+  korrekt som lyckad, och `Fetch-DataLua.ps1` hämtade ner den redan
+  publicerade `data.lua` — bekräftat genom att jämföra `generatedAt`
+  (färsk, från denna körning) mot per-item `capturedAt` (26 min äldre,
+  den faktiska senaste riktiga synken), exakt den distinktion skriptet
+  är byggt för att aldrig blanda ihop.
   **Låst lärdom, gäller allt framtida AH-UI-arbete i addonet**: anropa
   ALDRIG `C_AuctionHouse.SendSearchQuery`/`SendBrowseQuery` direkt.
   Hittades i skarp in-game-testning (v1: `/waht search` skrev ut

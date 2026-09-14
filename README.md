@@ -88,6 +88,15 @@ machine: install the addon folder into
 `Fetch-DataLua.ps1 -AddOnsPath "<that same AddOns folder>"` once and
 register it as a scheduled task the same way.
 
+For right before a play session, `scripts/windows/SyncNow.ps1` triggers an
+immediate sync instead of waiting on the background schedule: it dispatches
+`sync.yml` via `gh workflow run` (reusing the existing `gh` CLI login, no
+separate token), polls the specific run it triggered until it's done
+(2-3 min typical), then runs `Fetch-DataLua.ps1`. A desktop shortcut
+("WoW AH Tracker - Sync Now.lnk") runs it with one double-click; pinning
+that to the taskbar is a manual right-click step since Windows blocks
+fully scripted taskbar pinning.
+
 ## Scheduling
 
 `.github/workflows/sync.yml` runs `npm run sync` every 15 minutes via GitHub
