@@ -13,14 +13,22 @@
   Passed through to Fetch-DataLua.ps1.
 
 .NOTES
+  Dispatches with force=true, which makes runFullSync() bypass its normal
+  55-minute self-throttle and always do a real Blizzard fetch - this is
+  the one path in the whole pipeline where that's intentional: a single
+  manual press is nowhere near enough load (~93 requests) for Blizzard to
+  care, even several presses within an hour, and the point of this button
+  is genuinely fresh numbers on demand, not "whatever's already published."
+  The background */15 schedule and its pinger keep respecting the
+  self-throttle as before - this only changes the manual on-demand path.
+
   Deliberately does NOT poll data.lua's generatedAt as a "done" signal -
-  generatedAt bumps on every workflow run, including ticks where
-  runFullSync() self-throttled and did no real work (see CLAUDE.md).
-  Polling the workflow run's own status instead sidesteps that entirely:
-  it only tells us the run finished, not whether it did real work - which
-  is correct, since if the last real sync was under the 55-minute
-  self-throttle window, the already-published data is "fresh enough" by
-  the pipeline's own definition and there's nothing wrong with fetching it.
+  generatedAt bumps on every workflow run regardless of whether a real
+  fetch happened (see CLAUDE.md). Polling the workflow run's own status
+  instead sidesteps that: with force=true a completed run always means a
+  real fetch happened, so "success, data.lua updated" is always accurate
+  here - unlike an unforced run, where completion alone wouldn't tell you
+  that.
 #>
 param(
     [string]$Repo = "Sundberg-Simon/wow-ah-tracker",
@@ -39,7 +47,7 @@ function Write-Status {
 Write-Status "Triggering sync workflow on $Repo..."
 $dispatchedAt = (Get-Date).ToUniversalTime()
 
-gh workflow run sync.yml --repo $Repo
+gh workflow run sync.yml --repo $Repo -f force=true
 if ($LASTEXITCODE -ne 0) {
     Write-Status "FAILED: could not trigger the workflow (gh exited $LASTEXITCODE) - is 'gh auth status' still logged in?"
     exit 1

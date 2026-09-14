@@ -7,7 +7,12 @@ on:
     # Running every 15 min gives 4 chances/hour so a dropped tick doesn't
     # matter; runFullSync() self-throttles to stay near-hourly regardless.
     - cron: "*/15 * * * *"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Bypass the 55-minute self-throttle and always do a real fetch"
+        type: boolean
+        default: false
 
 # Never two sync runs at once. Without this, a delayed tick and the next
 # on-time tick could run in parallel, both pass the self-throttle (it isn't
@@ -37,6 +42,11 @@ jobs:
           BLIZZARD_CLIENT_ID: ${{ secrets.BLIZZARD_CLIENT_ID }}
           BLIZZARD_CLIENT_SECRET: ${{ secrets.BLIZZARD_CLIENT_SECRET }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          # github.event.inputs doesn't exist at all on a schedule-triggered
+          # run, so the || 'false' fallback matters - without it this would
+          # error (or worse, evaluate to something truthy) on every
+          # scheduled tick instead of just the manual "force" path.
+          FORCE_SYNC: ${{ github.event.inputs.force || 'false' }}
       - run: npm run report # reads from the DB only, writes reports/index.html
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}

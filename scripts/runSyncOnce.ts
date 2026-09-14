@@ -11,7 +11,8 @@ async function main() {
   // everywhere), so applying it on every tick is safe and avoids a second
   // Node process + Neon connection per tick just for migration.
   await pool.query(readFileSync(path.join(__dirname, "../src/db/schema.sql"), "utf8"));
-  await runFullSync();
+  const force = process.env.FORCE_SYNC === "true";
+  await runFullSync(force);
 }
 
 main()

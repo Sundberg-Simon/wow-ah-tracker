@@ -163,13 +163,15 @@ async function commitRun(
  * whole run in a single transaction so a partial failure never lands in the
  * DB looking like a complete snapshot.
  */
-export async function runFullSync(): Promise<void> {
+export async function runFullSync(force = false): Promise<void> {
   const now = new Date();
   const lastSuccess = await getLastSuccessfulSyncStartedAt();
   const elapsedMs = lastSuccess ? now.getTime() - lastSuccess.getTime() : null;
   const gapMinutes = elapsedMs === null ? null : Math.round(elapsedMs / 60000);
 
-  if (elapsedMs !== null && elapsedMs < MIN_INTERVAL_MS) {
+  if (force) {
+    console.log("Forced sync via manual trigger - bypassing self-throttle.");
+  } else if (elapsedMs !== null && elapsedMs < MIN_INTERVAL_MS) {
     console.log(
       `Skipping sync: last successful run was ${gapMinutes}min ago (< 55min threshold). No API calls, no DB writes.`,
     );
