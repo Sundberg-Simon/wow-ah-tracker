@@ -63,11 +63,30 @@ external assets, gitignored since it's generated output).
 
 Alongside `index.html`, the same command also writes `reports/data.lua` -
 a machine-readable export of the same data (per active item: id, name,
-category, EU-wide min/median price, per-realm breakdown) as a Lua table
-literal (`WowAhTrackerData`), not JSON, since that's what a future WoW
-addon can load directly. It's published to the same Pages URL alongside
-the HTML (e.g. `.../wow-ah-tracker/data.lua`). This is just the data
-export - the addon itself doesn't exist yet.
+category, EU-wide min/median price, per-realm breakdown, plus a
+`connectedRealms` table of every EU connected-realm group and its member
+names) as a Lua table literal (`WowAhTrackerData`), not JSON, since that's
+what the WoW addon below loads directly. It's published to the same Pages
+URL alongside the HTML (e.g. `.../wow-ah-tracker/data.lua`).
+
+## WoW addon + Windows fetch job
+
+`addon/WowAHTracker/` is a v1 in-game addon: on login it prints an EU-wide
+min/median summary for each active tracked item, compared against your own
+connected-realm listings when there are any. `/waht` repeats the summary
+on demand; `/waht search <name>` looks up a tracked item and searches the
+Auction House for it (only works while the AH window is open - that's a
+Blizzard API restriction, not a bug).
+
+The addon does no networking itself - `scripts/windows/Fetch-DataLua.ps1`
+is a scheduled Windows task (registered via `schtasks`, triggers at logon
+and repeats every 15 minutes while logged in) that downloads `data.lua`
+from the published Pages URL straight into the addon's folder, validating
+it before ever replacing the working copy. To set this up on a new
+machine: install the addon folder into
+`<WoW install>\_retail_\Interface\AddOns\`, then run
+`Fetch-DataLua.ps1 -AddOnsPath "<that same AddOns folder>"` once and
+register it as a scheduled task the same way.
 
 ## Scheduling
 

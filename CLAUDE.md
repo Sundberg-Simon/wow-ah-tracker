@@ -25,7 +25,11 @@ självspärr, simulerad realm-krasch för partial-hantering) och i skarp
 CI. Secrets konfigurerade. Väntar fortfarande in 2-3h verifiering av
 självspärren i naturlig (icke-manuellt-triggad) drift, samt att
 health-checken går grön i skarpt schemalagt läge (se "Obligatoriskt
-sista steg"). [Uppdatera den här raden manuellt allt eftersom.]
+sista steg"). WoW-addonet (v1: prisalert vid login, `/waht`,
+`/waht search`) och det schemalagda Windows-hämtningsjobbet är byggda
+och installerade på den här maskinen — men eftersom det är spelkod, inte
+CI, återstår manuell in-game-verifiering av spelaren själv innan det kan
+kallas klart. [Uppdatera den här raden manuellt allt eftersom.]
 
 ## Teknikstack — håll dig till detta, föreslå inte alternativ utan att fråga
 - Språk/runtime: TypeScript / Node.js (sync-jobb + query-helpers)
@@ -169,14 +173,42 @@ sista steg"). [Uppdatera den här raden manuellt allt eftersom.]
   CLI. Flera skarpa pass har körts och skrivit verifierade rader i
   DB:n, inklusive ett verifierat partial-run-scenario (se
   arkitekturbeslut #9).
+- **WoW-addon v1 + Windows-hämtningsjobb** (byggt 2026-09-13/14):
+  `addon/WowAHTracker/` (Interface 120100, uppslaget mot en
+  live-byggspårare — inte gissat) läser `WowAhTrackerData` vid
+  `PLAYER_LOGIN`, skriver ut EU-wide min/median per aktivt bevakat item
+  och jämför mot spelarens egen connected-realm-grupp (matchad via
+  `GetRealmName()`, normaliserad för att stryka mellanslag på samma
+  sätt som WoW:s API gör). `/waht` upprepar sammanfattningen; `/waht
+  search <namn>` slår upp ett bevakat item och kör
+  `C_AuctionHouse.SendSearchQuery` via `MakeItemKey` — kollar explicit
+  att AH-fönstret är öppet innan anropet, annars ett tydligt
+  felmeddelande istället för ett tyst no-op. Allt hanterar saknad/nil
+  `WowAhTrackerData` utan Lua-fel.
+  `scripts/windows/Fetch-DataLua.ps1` hämtar `data.lua` från Pages-URL:en
+  till en temp-fil, validerar att den innehåller `WowAhTrackerData = {`
+  nära toppen och inte ser ut som en HTML-felsida, och ersätter först då
+  den riktiga filen — verifierat mot en riktig 404 att en misslyckad
+  hämtning lämnar den befintliga filen helt orörd (identisk storlek och
+  tidsstämpel).
+  Schemaläggning: `schtasks.exe /create` tillåter INTE `/RI`+`/DU`
+  tillsammans med `/sc ONLOGON` (CLI-begränsning, inte en begränsning i
+  själva Task Scheduler-motorn — GUI:t stödjer exakt detta). Löst genom
+  att importera en hopskriven task-XML via `schtasks /create /xml`
+  istället. Det kontot som kör detta saknar dessutom rättighet att
+  registrera schemalagda uppgifter alls utan förhöjda rättigheter på den
+  här maskinen (bekräftat: även den enklaste möjliga `/create` gav
+  "Åtkomst nekad") — löst genom en engångs-UAC-höjning
+  (`Start-Process -Verb RunAs`) enbart för registreringssteget; själva
+  den registrerade uppgiften körs sedan som den vanliga användaren
+  (`LogonType: InteractiveToken`, ingen förhöjning vid körning).
+  Verifierat: uppgiften finns (`schtasks /query /tn WowAhTrackerFetch
+  /xml` visar korrekt `LogonTrigger` med `Interval PT15M` / `Duration
+  P3650D`), och en riktig körning via `schtasks /run` uppdaterade
+  faktiskt `data.lua` (nytt `Last Result: 0`, ny tidsstämpel, ny
+  filstorlek) — inte bara att jobbet "finns".
 
 ## Vad vi medvetet skjuter upp (fråga innan du bygger något av detta)
-- **In-game-addon**: en companion-app synkar bevakad prisdata ner till en
-  lokal fil; addonet läser den + `GetRealmName()` vid login och visar en
-  alert om något bevakat item ser bra ut på den realmen. Sökning i AH
-  triggas direkt via `C_AuctionHouse.SendSearchQuery`/`SendBrowseQuery`
-  när spelaren klickar, inte via kopiera-klistra (Lua-addons har ingen
-  OS-clipboard-åtkomst).
 - **Favorites-list-integration i addonet**: för bevakade items som är
   favoritmarkerade i spelets inbyggda AH (`IsFavoriteItem`/
   `RequestFavorites`), visa regionalt snittpris i en kolumn (hover →
@@ -213,3 +245,11 @@ health.yml, tre ggr/dag) och bekräfta att den går grön i skarp drift
 efter att tillräckligt många schemalagda körningar hunnit samlas
 (~18 lyckade på 24h). Går den röd initialt är det förväntat tills
 kadensen stabiliserats — inte nödvändigtvis ett nytt fel.
+
+**Addon/spelkod är ett specialfall**: `gh run list` säger ingenting om
+kod som körs i WoW-klienten. Ett addon eller ändring av det är ALDRIG
+"klart" förrän spelaren själv har startat om WoW eller kört `/reload`,
+beskrivit exakt vad som hände i chatten (eller inte hände), och du har
+fått den återkopplingen — anta aldrig att Lua-koden fungerar bara för
+att den parsar syntaktiskt (verifierat lokalt med `luaparse`, som bara
+fångar syntaxfel, inte fel API-namn/enum-medlemmar/runtime-fel).
