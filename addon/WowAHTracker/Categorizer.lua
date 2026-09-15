@@ -247,7 +247,16 @@ local function RebuildBagColumn(bagItems)
 				GameTooltip:Show()
 			end)
 			row.addPerm:SetScript("OnClick", function()
-				AddToCategory(item.id, item.name, "permanent")
+				-- Permanent items are tracked by item id alone, and random-
+				-- suffix variants ("Ring of the X" vs "Ring of the Y") share
+				-- one base id with the suffix conveyed separately (verified
+				-- against Blizzard's own item/auction API - see CLAUDE.md).
+				-- So the *tracked id* already covers every suffix roll
+				-- automatically; only the display name needs resolving to
+				-- the generic base name here, via the bare item id rather
+				-- than this specific bag instance's suffixed name.
+				local baseName = C_Item.GetItemInfo(item.id)
+				AddToCategory(item.id, baseName or item.name, "permanent")
 				RefreshAll()
 			end)
 			row.addPatch:SetScript("OnClick", function()

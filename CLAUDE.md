@@ -158,6 +158,36 @@ eftersom.]
     måste vara påslaget i Settings → Pages → "Build and deployment" →
     källa "GitHub Actions" (inte "Deploy from a branch") innan första
     deploy-körningen kan lyckas.
+11. **Permanenta items trackas per bas-item-id; slumpade suffix-varianter
+    ("Ring of the X" vs "Ring of the Y") antas dela samma id, inte ha
+    egna distinkta id:n.** Detta är en väl underbyggd men INTE 100%
+    empiriskt hands-on-bekräftad slutsats (ingen sida-vid-sida-jämförelse
+    av två riktiga suffix-varianters id:n har gjorts) — grundad på tre
+    konvergerande källor 2026-09-15: (1) WoW:s item-link-format har haft
+    `itemID` och `suffixID` som separata fält sedan pre-2.0, dokumenterat
+    och arkitektoniskt oförändrat sen dess; (2) en skarp sökning mot
+    Blizzards egen `/data/wow/search/item` + `/data/wow/item/{id}` över
+    50 riktiga items visade noll förekomster av bakad suffix-text i
+    statiska namn-fält; (3) mekaniken är sedan länge stabil, väldokumenterad
+    community-kunskap, inte en smal/färsk API-yta (till skillnad från
+    AH-sökbugen). Konsekvens i kod: `Categorizer.lua`s "+P"-knapp slår
+    upp visningsnamnet via `C_Item.GetItemInfo(item.id)` (bart id, inte
+    bag-instansens suffix-namn) eftersom bas-id:t redan antas täcka alla
+    suffix-rullningar automatiskt i `price_snapshots`/`auctions.ts`s
+    `aggregateByItem` — ingen schema- eller pipeline-ändring gjord för
+    detta.
+    **Felläge om antagandet visar sig fel för ett specifikt item**: den
+    specifika suffix-varianten missas helt tyst av trackingen (samma
+    begränsning som redan finns idag för vilket item som helst utanför
+    listan) — inget kraschar, inget syns som fel, bara en AH-notering som
+    aldrig räknas med. Om ett "varför fångade inte trackern den där
+    notering"-mysterium dyker upp för ett permanent gear-item med känt
+    suffix-namn i framtiden: det är HÄR man ska leta först, inte anta en
+    ny bugg. Ingen ytterligare efterforskning planerad — inte värt att
+    jaga ett garanterat sida-vid-sida-exempel för ett projekt i den här
+    skalan. Dyker ett riktigt suffix-par upp naturligt senare (två
+    varianter av samma gear-bit på samma eller olika karaktärer), räcker
+    en snabb id-koll då för att bekräfta definitivt.
 
 ## Vad som är byggt och verifierat hittills
 - **Milestone 1**: OAuth-token, connected-realm-upplösning, per-realm-
