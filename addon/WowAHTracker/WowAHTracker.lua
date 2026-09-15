@@ -192,8 +192,14 @@ SlashCmdList["WOWAHTRACKER"] = function(msg)
 		printSummary()
 	elseif command == "search" then
 		searchAuctionHouse(rest)
+	elseif command == "categorize" then
+		if WowAHTrackerCategorizer_Toggle then
+			WowAHTrackerCategorizer_Toggle()
+		else
+			printMsg("Categorizer failed to load - check for a Lua error at login.")
+		end
 	else
-		printMsg("Unknown command. Usage: /waht (summary) or /waht search <item name>")
+		printMsg("Unknown command. Usage: /waht (summary), /waht search <item name>, or /waht categorize")
 	end
 end
 
