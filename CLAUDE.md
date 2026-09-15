@@ -188,6 +188,41 @@ eftersom.]
     skalan. Dyker ett riktigt suffix-par upp naturligt senare (två
     varianter av samma gear-bit på samma eller olika karaktärer), räcker
     en snabb id-koll då för att bekräfta definitivt.
+12. **Klassiskt slumpsuffix ("of the X") går inte att särskilja i
+    Blizzards publika Auction House-API — bekräftad plattformsbegränsning,
+    inte något att lösa i vår kod.** Uppföljning till #11: om
+    bas-id delas mellan suffix-varianter, kan då en patch-specifik post
+    ändå peka ut EN specifik suffix-variant istället för att klumpas ihop
+    med alla? Svar: nej, inte för det klassiska suffix-systemet.
+    Bekräftat 2026-09-15 mot Warcraft Wikis fullständiga, dokumenterade
+    tabell över `Enum.ItemModification` (samma typsystem som vårt eget
+    `item.modifiers`-fält i AH-svaret använder — bekräftat mot skarp
+    data: `type=28` = `ContentTuningID` osv., matchar exakt tabellen)
+    — klassiskt suffix-id finns INTE med i den tabellen alls. Wikin är
+    explicit: suffix ligger uteslutande i det gamla positionella
+    länk-fältet (`suffixID`, mot `ItemRandomProperties.db2`/
+    `ItemRandomSuffix.db2`), helt separat från `Enum.ItemModification`.
+    Eftersom AH-API:t bara exponerar `Enum.ItemModification`-baserade
+    modifiers (plus `bonus_lists`) och ALDRIG den klassiska
+    `suffixID`, finns det ingen data i AH-svaret som kan skilja
+    "Ring of the X" från "Ring of the Y" — bara det delade bas-id:t.
+    Ingen schemaändring, oavsett hur genomtänkt, kan återskapa data
+    som API:t helt enkelt inte skickar.
+    **Varför det troligen inte spelar roll i praktiken**: det klassiska
+    suffix-systemet är en föråldrad (mest Vanilla-eran) mekanik.
+    Aktuella patch-specifika kandidater (crafting-mats, raid-drops) är
+    antingen suffix-fria helt, eller använder det MODERNA
+    modifier-systemet (`ContentTuningID`, crafting quality-nivåer, etc.)
+    som redan syns i `item.modifiers`/`bonus_lists` i vår data, eller är
+    helt enkelt egna distinkta item-id:n från början (t.ex. olika
+    stat-fokuserade katalysator-belöningar). Beslut: bygg INGEN
+    suffix-medveten lagring nu — det skulle konstruera runt en mekanik
+    plattformen inte kan leverera data för ändå, för ett scenario som
+    knappast dyker upp i riktiga patch-specifika tillägg. Dyker ett
+    genuint modifier-känsligt patch-specifikt item upp senare: kolla dess
+    faktiska `modifiers`/`bonus_lists`-värden då (API:t exponerar dem för
+    det moderna systemet) och utöka nyckelbildning bara om just det
+    fallet kräver det — bygg inte generisk suffix-infrastruktur i förväg.
 
 ## Vad som är byggt och verifierat hittills
 - **Milestone 1**: OAuth-token, connected-realm-upplösning, per-realm-
