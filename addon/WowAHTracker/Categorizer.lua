@@ -51,7 +51,16 @@ local function ScanBagContents()
 				if not name or name == "" then
 					name = C_Item.GetItemInfo(info.itemID)
 				end
-				table.insert(items, { id = info.itemID, name = name or ("Item " .. info.itemID) })
+				-- bagID/slot kept (not just itemID) so the row can show the
+				-- exact real tooltip via GameTooltip:SetBagItem - durability,
+				-- enchants, etc. - not just a generic base-item tooltip.
+				table.insert(items, {
+					id = info.itemID,
+					name = name or ("Item " .. info.itemID),
+					icon = info.iconFileID,
+					bagID = bagID,
+					slot = slot,
+				})
 			end
 		end
 	end
@@ -158,11 +167,24 @@ local function GetOrCreateBagRow(index)
 	row = CreateFrame("Frame", nil, bagContent)
 	row:SetHeight(ROW_HEIGHT)
 
+	row.icon = row:CreateTexture(nil, "ARTWORK")
+	row.icon:SetSize(16, 16)
+	row.icon:SetPoint("LEFT", 2, 0)
+
 	row.text = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-	row.text:SetPoint("LEFT", 2, 0)
+	row.text:SetPoint("LEFT", row.icon, "RIGHT", 4, 0)
 	row.text:SetPoint("RIGHT", row, "RIGHT", -52, 0)
 	row.text:SetJustifyH("LEFT")
 	row.text:SetWordWrap(false)
+
+	-- Hover the row (icon or name) to see the item's real tooltip, exactly
+	-- as it would show in the actual bag - SetBagItem rather than
+	-- SetItemByID so it reflects this specific instance (durability,
+	-- enchants, etc.), not just the generic base item.
+	row:EnableMouse(true)
+	row:SetScript("OnLeave", function()
+		GameTooltip:Hide()
+	end)
 
 	row.addPerm = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
 	row.addPerm:SetSize(24, 18)
@@ -218,6 +240,12 @@ local function RebuildBagColumn(bagItems)
 			local row = GetOrCreateBagRow(shown)
 			PositionRow(row, shown)
 			row.text:SetText(string.format("%s (%d)", item.name, item.id))
+			row.icon:SetTexture(item.icon)
+			row:SetScript("OnEnter", function(self)
+				GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+				GameTooltip:SetBagItem(item.bagID, item.slot)
+				GameTooltip:Show()
+			end)
 			row.addPerm:SetScript("OnClick", function()
 				AddToCategory(item.id, item.name, "permanent")
 				RefreshAll()
