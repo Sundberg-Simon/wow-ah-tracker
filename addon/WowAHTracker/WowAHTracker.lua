@@ -220,8 +220,14 @@ SlashCmdList["WOWAHTRACKER"] = function(msg)
 		else
 			printMsg("Categorizer failed to load - check for a Lua error at login.")
 		end
+	elseif command == "sales" then
+		if WowAHTrackerSalesLog_Print then
+			WowAHTrackerSalesLog_Print()
+		else
+			printMsg("Sales log failed to load - check for a Lua error at login.")
+		end
 	else
-		printMsg("Unknown command. Usage: /waht (summary), /waht search <item name>, or /waht categorize")
+		printMsg("Unknown command. Usage: /waht (summary), /waht search <item name>, /waht categorize, or /waht sales")
 	end
 end
 
