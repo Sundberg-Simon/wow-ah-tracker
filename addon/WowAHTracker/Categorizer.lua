@@ -454,6 +454,16 @@ local function CreateCategorizerFrame()
 			RefreshAll()
 		end
 	end)
+
+	-- CreateFrame() returns a frame that is shown by default. Without this,
+	-- the very first /waht categorize after login/reload (the only time
+	-- `frame` is still nil here) would create it already "shown", so the
+	-- toggle's IsShown() check below immediately hides it right back in the
+	-- same call - the window never actually appears, and it takes a second
+	-- invocation to show the now-correctly-hidden existing frame. Starting
+	-- hidden here makes the first toggle call behave the same as every
+	-- later one.
+	frame:Hide()
 end
 
 function WowAHTrackerCategorizer_Toggle()
