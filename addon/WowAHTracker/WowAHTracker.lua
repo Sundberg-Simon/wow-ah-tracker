@@ -205,6 +205,31 @@ local function searchAuctionHouse(query)
 	printMsg(string.format("Searching the Auction House for %s...", matchName))
 end
 
+-- Single source of truth for both `/waht help` and the unknown-command
+-- fallback, so the two can never drift out of sync with each other.
+local COMMANDS = {
+	{ usage = "/waht", desc = "Print the price summary (also shown automatically on login)." },
+	{
+		usage = "/waht search <item name>",
+		desc = "Look up a tracked item and drive the Auction House search bar to it (AH window must be open).",
+	},
+	{ usage = "/waht categorize", desc = "Open the bag categorizer to build the tracked-item list from your bags." },
+	{ usage = "/waht sales", desc = "Show recently captured AH sales (count + last 10)." },
+	{
+		usage = "/waht salesdebug",
+		desc = "Show the last 25 mailbox scan traces, for diagnosing the sales log if something looks off.",
+	},
+	{ usage = "/waht realms", desc = "Open the realm roster - add this character and see EU connected-realm coverage." },
+	{ usage = "/waht help", desc = "List all commands (this)." },
+}
+
+local function printHelp()
+	printMsg("Commands:")
+	for _, entry in ipairs(COMMANDS) do
+		DEFAULT_CHAT_FRAME:AddMessage(string.format("  %s - %s", entry.usage, entry.desc))
+	end
+end
+
 SLASH_WOWAHTRACKER1 = "/waht"
 SlashCmdList["WOWAHTRACKER"] = function(msg)
 	local command, rest = (msg or ""):match("^(%S*)%s*(.-)$")
@@ -238,10 +263,10 @@ SlashCmdList["WOWAHTRACKER"] = function(msg)
 		else
 			printMsg("Realm roster failed to load - check for a Lua error at login.")
 		end
+	elseif command == "help" then
+		printHelp()
 	else
-		printMsg(
-			"Unknown command. Usage: /waht (summary), /waht search <item name>, /waht categorize, /waht sales, /waht salesdebug, or /waht realms"
-		)
+		printMsg('Unknown command "' .. command .. '". Type /waht help for a list of commands.')
 	end
 end
 
