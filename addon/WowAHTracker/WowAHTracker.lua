@@ -232,9 +232,15 @@ SlashCmdList["WOWAHTRACKER"] = function(msg)
 		else
 			printMsg("Sales log failed to load - check for a Lua error at login.")
 		end
+	elseif command == "realms" then
+		if WowAHTrackerRealmRoster_Toggle then
+			WowAHTrackerRealmRoster_Toggle()
+		else
+			printMsg("Realm roster failed to load - check for a Lua error at login.")
+		end
 	else
 		printMsg(
-			"Unknown command. Usage: /waht (summary), /waht search <item name>, /waht categorize, /waht sales, or /waht salesdebug"
+			"Unknown command. Usage: /waht (summary), /waht search <item name>, /waht categorize, /waht sales, /waht salesdebug, or /waht realms"
 		)
 	end
 end
