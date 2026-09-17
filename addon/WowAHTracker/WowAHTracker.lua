@@ -152,13 +152,35 @@ local function searchAuctionHouse(query)
 		return
 	end
 
+	-- pairs() iteration order is undefined, so picking the first substring
+	-- match found that way is arbitrary and can change between logins/
+	-- reloads once two tracked items' names can plausibly share a substring
+	-- (e.g. "ore" or "flask" matching more than one item at real-list
+	-- scale). Resolve deterministically instead: an exact case-insensitive
+	-- full-name match wins immediately if one exists; otherwise walk
+	-- candidates in a stable item-id order and keep the shortest matching
+	-- name (closest to an exact match), with item id as the tie-breaker.
 	local needle = query:lower()
 	local matchName
-	for _, item in pairs(WowAhTrackerData.items) do
-		if item.name and item.name:lower():find(needle, 1, true) then
+	for _, itemId in ipairs(sortedItemIds(WowAhTrackerData.items)) do
+		local item = WowAhTrackerData.items[itemId]
+		if item.name and item.name:lower() == needle then
 			matchName = item.name
 			break
 		end
+	end
+
+	if not matchName then
+		local bestName, bestItemId
+		for _, itemId in ipairs(sortedItemIds(WowAhTrackerData.items)) do
+			local item = WowAhTrackerData.items[itemId]
+			if item.name and item.name:lower():find(needle, 1, true) then
+				if not bestName or #item.name < #bestName then
+					bestName, bestItemId = item.name, itemId
+				end
+			end
+		end
+		matchName = bestName
 	end
 
 	if not matchName then
