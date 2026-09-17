@@ -62,32 +62,56 @@
 -- sales of the same item at the same price on the same day would then
 -- collide on that same key and silently collapse into one record.
 --
--- Instead we snapshot the *multiset* of currently-open seller-invoice
--- signatures on every event and diff it against the multiset seen last
--- time (persisted, so it survives /reload and relogs):
---   - Same signature present both times -> already counted, skip.
---   - A signature's count went up (0->1, or 1->2 for two simultaneous
---     identical sales) -> that many new sales, record that many rows.
---   - A signature's count went down -> mail was claimed/removed; nothing
---     to record (if it disappeared before we ever saw it - e.g. TSM
---     claimed it between logins before this addon loaded - that sale is
---     simply never observed; a real gap, but not one this addon can close
---     without an API-exposed mail ID that doesn't exist).
--- This avoids re-recording a mail that just sits there through many
--- redundant events, and correctly records N distinct sales when N
--- identical-signature sale mails genuinely coexist at once.
+-- REAL BUG FOUND 2026-09-17 (during the first live mail claim, see git log
+-- for the original plain-snapshot-diff version this replaced): both real
+-- sales that mail claim got logged twice, with identical timestamps down to
+-- the second. A plain "diff against last snapshot, then overwrite the
+-- snapshot" approach is correct as long as consecutive MAIL_INBOX_UPDATE
+-- events see a *monotonic* view of the inbox (mail only ever appears once
+-- and later disappears once) - but the client loads/refreshes the inbox
+-- list itself (paging in more of it, or momentarily re-sorting it as a bulk
+-- claim works through several mails one at a time), and if a signature
+-- that's genuinely still sitting there ever drops out of one intermediate
+-- snapshot and reappears in the next, a plain diff sees that reappearance
+-- as brand new and logs it again. This is the best-supported explanation
+-- given Blizzard's own client code (the inbox list is refreshed
+-- incrementally, see MailFrame_RefreshInbox/InboxFrame_Update) and it fits
+-- every observed detail (both sales double-logged, not more; identical
+-- second-precision timestamps, consistent with two scans within the same
+-- MAIL_INBOX_UPDATE burst) - but it was reasoned from source, not caught on
+-- a live trace, so /waht salesdebug (below) now keeps a short trace of each
+-- scan specifically so a recurrence can be confirmed rather than guessed at
+-- again.
+--
+-- Fix: track each signature's *high-water-mark* count plus when it was
+-- last actually seen (WowAHTrackerSalesDB.seenSignatures), instead of a
+-- plain last-snapshot value that a signature can vanish from and reappear
+-- in. On every scan:
+--   - A signature's live count above its recorded high-water-mark -> that
+--     many new sales, record that many rows, raise the mark.
+--   - A signature seen at or below its mark -> already counted, skip (the
+--     mark never drops just because one scan happened not to see it).
+--   - A signature not seen at all for more than SIGNATURE_GRACE_SECONDS
+--     (currently 60s - comfortably longer than an inbox-load burst, short
+--     enough that two unrelated real sales colliding within it should be
+--     rare) since it was last actually observed -> forgotten entirely, so
+--     a later genuinely new sale with the same signature (a different day,
+--     say) is correctly treated as new rather than permanently suppressed.
+-- This keeps both original correctness properties: N simultaneous
+-- identical-signature sales still log as N rows (0 -> N directly raises the
+-- mark by N), and a mail that just sits there through many redundant events
+-- is never re-logged (its count never exceeds its own mark).
 --
 -- KNOWN REMAINING GAP (flagged rather than silently accepted, per Simon's
--- ask): if a signature's count goes from 1 to 1 within a single event
--- because one matching mail was claimed at the *exact same moment* a new,
--- genuinely separate sale with an identical signature (same item, same
--- price, same count, same buyer-or-both-anonymous) arrived, the net delta
--- is zero and the new sale is silently missed. That needs an exact content
--- collision AND a same-tick claim+arrival race, so it should be rare - but
--- it's a real precision hole, not just a theoretical one, and this data
--- model can't fully close it without a mail ID the API doesn't expose.
--- Worth remembering if a future reconciliation pass ever finds a real AH
--- sale that isn't in this log.
+-- ask, and narrower than before): two genuinely separate real sales with an
+-- identical signature (same item, same price, same count, same buyer-or-
+-- both-anonymous) that happen within the same SIGNATURE_GRACE_SECONDS
+-- window of each other can still collapse into one record, the same way
+-- the original diff could - but now bounded to "within ~60 seconds of each
+-- other" instead of "any time while either mail happens to still be
+-- sitting unclaimed" (which could span the full 30-day mail expiry). Worth
+-- remembering if a future reconciliation pass ever finds a real AH sale
+-- that isn't in this log.
 --
 -- Item identification is name-only (GetInboxInvoiceInfo has no itemID/
 -- itemLink return at all) - findTrackedItemId() below opportunistically
@@ -109,11 +133,18 @@ local function printMsg(msg)
 end
 
 local SIG_SEP = "\30"
+local SIGNATURE_GRACE_SECONDS = 60
+local TRACE_MAX_ENTRIES = 25
 
 local function EnsureDB()
 	WowAHTrackerSalesDB = WowAHTrackerSalesDB or {}
 	WowAHTrackerSalesDB.sales = WowAHTrackerSalesDB.sales or {}
-	WowAHTrackerSalesDB.lastSellerSignatures = WowAHTrackerSalesDB.lastSellerSignatures or {}
+	WowAHTrackerSalesDB.seenSignatures = WowAHTrackerSalesDB.seenSignatures or {}
+	WowAHTrackerSalesDB.trace = WowAHTrackerSalesDB.trace or {}
+	-- Vestigial field from the plain-snapshot-diff version this replaced -
+	-- unused now, dropped so a saved-variables dump doesn't look like it's
+	-- still in play.
+	WowAHTrackerSalesDB.lastSellerSignatures = nil
 end
 
 local function findTrackedItemId(itemName)
@@ -190,21 +221,58 @@ local function recordSale(invoice)
 	})
 end
 
+-- Forgets any signature not actually seen (a live count for it in this
+-- scan) for more than the grace window - see the dedup rationale above.
+-- `now < info.lastSeenAt` guards a rollback of GetTime() (a full game
+-- client restart, not just /reload - GetTime() is system uptime and
+-- doesn't reset on /reload) that would otherwise make the elapsed-time
+-- check compute a bogus negative.
+local function pruneExpiredSignatures(seen, now)
+	for sig, info in pairs(seen) do
+		if now < info.lastSeenAt or (now - info.lastSeenAt) > SIGNATURE_GRACE_SECONDS then
+			seen[sig] = nil
+		end
+	end
+end
+
+local function appendTrace(now, numItems, currentBag, newlyLogged)
+	local sigSummaries = {}
+	for sig, count in pairs(currentBag) do
+		table.insert(sigSummaries, count > 1 and (sig .. " x" .. count) or sig)
+	end
+	table.insert(WowAHTrackerSalesDB.trace, {
+		at = date("%H:%M:%S"),
+		gameTime = now,
+		numItems = numItems,
+		sellerSignatures = sigSummaries,
+		newlyLogged = newlyLogged,
+	})
+	while #WowAHTrackerSalesDB.trace > TRACE_MAX_ENTRIES do
+		table.remove(WowAHTrackerSalesDB.trace, 1)
+	end
+end
+
 local function scanForNewSales()
 	EnsureDB()
 	local currentBag, sample = scanSellerInvoices()
-	local previousBag = WowAHTrackerSalesDB.lastSellerSignatures
+	local seen = WowAHTrackerSalesDB.seenSignatures
+	local now = GetTime()
+	local newlyLogged = 0
 
 	for sig, currentCount in pairs(currentBag) do
-		local previousCount = previousBag[sig] or 0
-		if currentCount > previousCount then
-			for _ = 1, currentCount - previousCount do
+		local recorded = seen[sig]
+		local recordedCount = recorded and recorded.count or 0
+		if currentCount > recordedCount then
+			for _ = 1, currentCount - recordedCount do
 				recordSale(sample[sig])
+				newlyLogged = newlyLogged + 1
 			end
 		end
+		seen[sig] = { count = math.max(currentCount, recordedCount), lastSeenAt = now }
 	end
 
-	WowAHTrackerSalesDB.lastSellerSignatures = currentBag
+	pruneExpiredSignatures(seen, now)
+	appendTrace(now, GetInboxNumItems(), currentBag, newlyLogged)
 end
 
 local function copperToGoldString(copper)
@@ -235,9 +303,35 @@ local function printSales()
 	end
 end
 
--- Exposed for the /waht sales slash command in WowAHTracker.lua.
+local function printTrace()
+	EnsureDB()
+	local trace = WowAHTrackerSalesDB.trace
+	printMsg(string.format("MAIL_INBOX_UPDATE trace (last %d scans):", #trace))
+	for _, entry in ipairs(trace) do
+		DEFAULT_CHAT_FRAME:AddMessage(
+			string.format(
+				"  %s (t=%.2f) numItems=%d sellerInvoices=%d newlyLogged=%d",
+				entry.at or "?",
+				entry.gameTime or 0,
+				entry.numItems or 0,
+				#(entry.sellerSignatures or {}),
+				entry.newlyLogged or 0
+			)
+		)
+		for _, sig in ipairs(entry.sellerSignatures or {}) do
+			DEFAULT_CHAT_FRAME:AddMessage("    - " .. sig:gsub(SIG_SEP, " | "))
+		end
+	end
+end
+
+-- Exposed for the /waht sales and /waht salesdebug slash commands in
+-- WowAHTracker.lua.
 function WowAHTrackerSalesLog_Print()
 	printSales()
+end
+
+function WowAHTrackerSalesLog_PrintTrace()
+	printTrace()
 end
 
 local eventFrame = CreateFrame("Frame")
