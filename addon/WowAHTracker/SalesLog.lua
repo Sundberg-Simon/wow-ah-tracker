@@ -65,23 +65,29 @@
 -- REAL BUG FOUND 2026-09-17 (during the first live mail claim, see git log
 -- for the original plain-snapshot-diff version this replaced): both real
 -- sales that mail claim got logged twice, with identical timestamps down to
--- the second. A plain "diff against last snapshot, then overwrite the
--- snapshot" approach is correct as long as consecutive MAIL_INBOX_UPDATE
--- events see a *monotonic* view of the inbox (mail only ever appears once
--- and later disappears once) - but the client loads/refreshes the inbox
--- list itself (paging in more of it, or momentarily re-sorting it as a bulk
--- claim works through several mails one at a time), and if a signature
--- that's genuinely still sitting there ever drops out of one intermediate
--- snapshot and reappears in the next, a plain diff sees that reappearance
--- as brand new and logs it again. This is the best-supported explanation
--- given Blizzard's own client code (the inbox list is refreshed
--- incrementally, see MailFrame_RefreshInbox/InboxFrame_Update) and it fits
--- every observed detail (both sales double-logged, not more; identical
--- second-precision timestamps, consistent with two scans within the same
--- MAIL_INBOX_UPDATE burst) - but it was reasoned from source, not caught on
--- a live trace, so /waht salesdebug (below) now keeps a short trace of each
--- scan specifically so a recurrence can be confirmed rather than guessed at
--- again.
+-- the second. CONFIRMED root cause, from inspecting Simon's actual
+-- duplicated saved-variables rows directly (not just reasoned from source):
+-- every field in each duplicate pair was byte-identical except `buyer` -
+-- "" in the first occurrence, the real buyer name ("Vallik") in the
+-- second. GetInboxInvoiceInfo's playerName evidently resolves
+-- asynchronously for a buyer the client doesn't already have cached (blank
+-- on an early read, populated once the name arrives), and the old
+-- signature included playerName - so that one field changing mid-flight,
+-- for the exact same still-present mail, produced two different signature
+-- strings and both were logged as "new". A first-pass fix (a high-water-
+-- mark instead of a plain snapshot diff, still below) was applied first on
+-- a different, plausible-but-unconfirmed theory (the inbox list loading/
+-- refreshing incrementally, per Blizzard's MailFrame_RefreshInbox/
+-- InboxFrame_Update) - that mechanism may or may not also be real, but it
+-- does NOT explain the buyer-name evidence on its own, and does not by
+-- itself prevent this failure mode (a signature's own content changing
+-- isn't the same bug as an unchanged signature flickering out and back
+-- in). Fixed for real by dropping playerName from the signature entirely
+-- (see buildSignature below) - buyer is still stored on each sale record
+-- for display, just not used to tell mails apart. Both mitigations are
+-- kept since they guard against two different real risks; /waht
+-- salesdebug's trace (below) stays in place in case a further recurrence
+-- points at yet another mechanism.
 --
 -- Fix: track each signature's *high-water-mark* count plus when it was
 -- last actually seen (WowAHTrackerSalesDB.seenSignatures), instead of a
@@ -103,15 +109,21 @@
 -- is never re-logged (its count never exceeds its own mark).
 --
 -- KNOWN REMAINING GAP (flagged rather than silently accepted, per Simon's
--- ask, and narrower than before): two genuinely separate real sales with an
--- identical signature (same item, same price, same count, same buyer-or-
--- both-anonymous) that happen within the same SIGNATURE_GRACE_SECONDS
--- window of each other can still collapse into one record, the same way
--- the original diff could - but now bounded to "within ~60 seconds of each
--- other" instead of "any time while either mail happens to still be
--- sitting unclaimed" (which could span the full 30-day mail expiry). Worth
--- remembering if a future reconciliation pass ever finds a real AH sale
--- that isn't in this log.
+-- ask): two genuinely separate real sales of the same item, at the same
+-- price, for the same count, within the same SIGNATURE_GRACE_SECONDS
+-- window of each other, can still collapse into one record - bounded to
+-- "within ~60 seconds of each other" rather than "any time while either
+-- mail happens to still be sitting unclaimed" (up to the full 30-day mail
+-- expiry), which is the improvement the high-water-mark fix above was
+-- for. Buyer name is NOT part of the disambiguation any more (see the
+-- 2026-09-17 root-cause note above - it's demonstrably unreliable, not
+-- just unavailable for commodities), so two such sales to *different*
+-- buyers within that same 60s window would also collide, which wasn't
+-- true before. Selling the same item at the same price twice within a
+-- minute is an uncommon but real pattern for a manual flipper re-listing
+-- a duplicate stack, so this isn't purely theoretical. Worth remembering
+-- if a future reconciliation pass ever finds a real AH sale that isn't in
+-- this log.
 --
 -- Item identification is name-only (GetInboxInvoiceInfo has no itemID/
 -- itemLink return at all) - findTrackedItemId() below opportunistically
@@ -160,6 +172,18 @@ local function findTrackedItemId(itemName)
 	return nil
 end
 
+-- playerName is deliberately NOT part of the signature - confirmed (from
+-- Simon's actual duplicated saved-variables rows, 2026-09-17) to sometimes
+-- come back as "" on one GetInboxInvoiceInfo(index) read of a mail and the
+-- real buyer name on a later read of the exact same still-present mail,
+-- with every other field byte-identical - a client-side async name
+-- resolution, not a real change. Including it in the signature meant that
+-- single field flipping mid-flight produced two different signature
+-- strings for one physical mail, which is what actually caused tonight's
+-- double-logging (the high-water-mark/grace-period mechanism below does
+-- NOT protect against a signature's own content changing, only against an
+-- unchanged signature disappearing and reappearing - both are real risks,
+-- so both mitigations stay in place).
 local function buildSignature(invoice)
 	return table.concat({
 		invoice.itemName or "",
@@ -167,7 +191,6 @@ local function buildSignature(invoice)
 		tostring(invoice.bid or 0),
 		tostring(invoice.consignment or 0),
 		tostring(invoice.deposit or 0),
-		invoice.playerName or "",
 	}, SIG_SEP)
 end
 
