@@ -135,18 +135,23 @@
 -- KNOWN REMAINING GAP (flagged rather than silently accepted, per Simon's
 -- ask, and now back to roughly its original width - the 60s window turned
 -- out to be actively harmful, not just narrow): two genuinely separate
--- real sales of the same item, same price, same count, within the same
--- ~30-day SIGNATURE_GRACE_SECONDS window of each other, can still collapse
--- into one record. Buyer name is NOT part of the disambiguation any more
--- (see the 2026-09-17 root-cause note above - it's demonstrably
--- unreliable, not just unavailable for commodities), so this now applies
--- across different buyers too. Given the choice between this (a quiet,
--- narrow undercount that a reconciliation pass could in principle catch)
--- and the over-counting bugs actually observed twice tonight (loud,
--- immediate, and would silently inflate recorded revenue with nothing to
--- prompt a second look), biasing hard against over-counting is the right
--- tradeoff here. Worth remembering if a future reconciliation pass ever
--- finds a real AH sale that isn't in this log.
+-- real sales of the same item, same price, same count, same character AND
+-- same realm, within the same ~30-day SIGNATURE_GRACE_SECONDS window of
+-- each other, can still collapse into one record. Buyer name is NOT part
+-- of the disambiguation any more (see the 2026-09-17 root-cause note
+-- above - it's demonstrably unreliable, not just unavailable for
+-- commodities), so this now applies across different buyers too. Given
+-- the choice between this (a quiet, narrow undercount that a
+-- reconciliation pass could in principle catch) and the over-counting
+-- bugs actually observed twice tonight (loud, immediate, and would
+-- silently inflate recorded revenue with nothing to prompt a second
+-- look), biasing hard against over-counting is the right tradeoff here.
+-- realm+character ARE part of the signature (see buildSignature) - with
+-- ~81 characters sharing 3 accounts' worth of WowAHTrackerSalesDB tables,
+-- two different characters selling the same item at the same price would
+-- otherwise have collided constantly; this was a pure narrowing with no
+-- downside, unlike dropping playerName. Worth remembering if a future
+-- reconciliation pass ever finds a real AH sale that isn't in this log.
 --
 -- Item identification is name-only (GetInboxInvoiceInfo has no itemID/
 -- itemLink return at all) - findTrackedItemId() below opportunistically
@@ -212,6 +217,17 @@ end
 -- NOT protect against a signature's own content changing, only against an
 -- unchanged signature disappearing and reappearing - both are real risks,
 -- so both mitigations stay in place).
+-- realm+character ARE part of the signature (added 2026-09-18, Simon plays
+-- ~81 characters, nearly all sharing one name, across 3 accounts) -
+-- WowAHTrackerSalesDB is account-wide (not per-character, see the .toc),
+-- so every character on the same account shares one seenSignatures/sales
+-- table. Without realm+character, two different characters on the same
+-- account selling the same item at the same price within the grace window
+-- would be indistinguishable from one character selling it twice - a
+-- needless widening of the known gap, since two sales from different
+-- characters or realms are never actually the same mail. Unlike dropping
+-- playerName, this is a pure narrowing with no tradeoff: it can only make
+-- two genuinely different mails compare as different, never the reverse.
 local function buildSignature(invoice)
 	return table.concat({
 		invoice.itemName or "",
@@ -219,6 +235,8 @@ local function buildSignature(invoice)
 		tostring(invoice.bid or 0),
 		tostring(invoice.consignment or 0),
 		tostring(invoice.deposit or 0),
+		invoice.realm or "",
+		invoice.character or "",
 	}, SIG_SEP)
 end
 
@@ -243,6 +261,8 @@ local function scanSellerInvoices()
 				consignment = consignment,
 				count = count,
 				commerceAuction = commerceAuction,
+				realm = GetRealmName(),
+				character = UnitName("player"),
 			}
 			local sig = buildSignature(invoice)
 			bag[sig] = (bag[sig] or 0) + 1
@@ -273,8 +293,8 @@ local function recordSale(invoice)
 		consignment = invoice.consignment,
 		netReceived = totalSalePrice + (invoice.deposit or 0) - (invoice.consignment or 0),
 		commerceAuction = invoice.commerceAuction or false,
-		realm = GetRealmName(),
-		character = UnitName("player"),
+		realm = invoice.realm,
+		character = invoice.character,
 		capturedAt = date("%Y-%m-%dT%H:%M:%S"),
 	}
 	table.insert(WowAHTrackerSalesDB.sales, record)
