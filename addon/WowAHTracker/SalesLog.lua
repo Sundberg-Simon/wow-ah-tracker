@@ -98,32 +98,55 @@
 --   - A signature seen at or below its mark -> already counted, skip (the
 --     mark never drops just because one scan happened not to see it).
 --   - A signature not seen at all for more than SIGNATURE_GRACE_SECONDS
---     (currently 60s - comfortably longer than an inbox-load burst, short
---     enough that two unrelated real sales colliding within it should be
---     rare) since it was last actually observed -> forgotten entirely, so
---     a later genuinely new sale with the same signature (a different day,
---     say) is correctly treated as new rather than permanently suppressed.
+--     since it was last actually observed -> forgotten entirely, so a
+--     later genuinely new sale with the same signature (weeks later, say)
+--     is correctly treated as new rather than permanently suppressed.
 -- This keeps both original correctness properties: N simultaneous
 -- identical-signature sales still log as N rows (0 -> N directly raises the
 -- mark by N), and a mail that just sits there through many redundant events
 -- is never re-logged (its count never exceeds its own mark).
 --
+-- SECOND REAL BUG FOUND 2026-09-17 (Vial of the Sands, 3x logged, same
+-- buyer all 3 times - this happened with e6bf225 already live, i.e. with
+-- playerName already OUT of the signature, so the buyer-name theory above
+-- cannot be what caused this one): SIGNATURE_GRACE_SECONDS was originally
+-- set to 60, calibrated for the wrong failure mode (sub-second scan
+-- flicker within one burst). MAIL_INBOX_UPDATE only fires while
+-- interacting with a mailbox, and a /waht salesdebug trace of the incident
+-- (14 scans in under a second, numItems draining 6->0) confirmed the
+-- client's cached inbox view collapses to empty the moment the mailbox
+-- window is closed - regardless of whether anything was actually claimed.
+-- pruneExpiredSignatures runs every scan on pure wall-clock elapsed time,
+-- with no way to tell "confirmed gone" apart from "no visibility right
+-- now" - so a signature's lastSeenAt simply stops refreshing the instant
+-- the mailbox closes, and 60 real seconds of the player doing anything
+-- else is enough to expire the mark. That makes a re-log near-guaranteed
+-- on ordinary usage (open mailbox, look, close, come back a bit later to
+-- actually claim) rather than the rare flicker case it was meant for -
+-- exactly matching both incidents (N logs = N mailbox visits more than a
+-- minute apart while the mail sat unclaimed, /reload or not).
+--
+-- Fixed by raising SIGNATURE_GRACE_SECONDS to the mail system's own 30-day
+-- invoice expiry instead of an arbitrary short window - a real invoice
+-- mail cannot still exist past that point regardless, so it's a genuine
+-- upper bound rather than a guess, and it comfortably covers any realistic
+-- gap between mailbox visits for mail that's still actually sitting there.
+--
 -- KNOWN REMAINING GAP (flagged rather than silently accepted, per Simon's
--- ask): two genuinely separate real sales of the same item, at the same
--- price, for the same count, within the same SIGNATURE_GRACE_SECONDS
--- window of each other, can still collapse into one record - bounded to
--- "within ~60 seconds of each other" rather than "any time while either
--- mail happens to still be sitting unclaimed" (up to the full 30-day mail
--- expiry), which is the improvement the high-water-mark fix above was
--- for. Buyer name is NOT part of the disambiguation any more (see the
--- 2026-09-17 root-cause note above - it's demonstrably unreliable, not
--- just unavailable for commodities), so two such sales to *different*
--- buyers within that same 60s window would also collide, which wasn't
--- true before. Selling the same item at the same price twice within a
--- minute is an uncommon but real pattern for a manual flipper re-listing
--- a duplicate stack, so this isn't purely theoretical. Worth remembering
--- if a future reconciliation pass ever finds a real AH sale that isn't in
--- this log.
+-- ask, and now back to roughly its original width - the 60s window turned
+-- out to be actively harmful, not just narrow): two genuinely separate
+-- real sales of the same item, same price, same count, within the same
+-- ~30-day SIGNATURE_GRACE_SECONDS window of each other, can still collapse
+-- into one record. Buyer name is NOT part of the disambiguation any more
+-- (see the 2026-09-17 root-cause note above - it's demonstrably
+-- unreliable, not just unavailable for commodities), so this now applies
+-- across different buyers too. Given the choice between this (a quiet,
+-- narrow undercount that a reconciliation pass could in principle catch)
+-- and the over-counting bugs actually observed twice tonight (loud,
+-- immediate, and would silently inflate recorded revenue with nothing to
+-- prompt a second look), biasing hard against over-counting is the right
+-- tradeoff here. Worth remembering if a future reconciliation pass ever
+-- finds a real AH sale that isn't in this log.
 --
 -- Item identification is name-only (GetInboxInvoiceInfo has no itemID/
 -- itemLink return at all) - findTrackedItemId() below opportunistically
@@ -145,7 +168,12 @@ local function printMsg(msg)
 end
 
 local SIG_SEP = "\30"
-local SIGNATURE_GRACE_SECONDS = 60
+-- 30 real days, matching the Auction House invoice mail's own expiry - a
+-- real invoice cannot still exist past that, so this is a genuine upper
+-- bound rather than an arbitrary guess. See the 2026-09-17 "SECOND REAL
+-- BUG" note above for why a short window (originally 60s) actively caused
+-- duplicate logging instead of preventing it.
+local SIGNATURE_GRACE_SECONDS = 30 * 24 * 60 * 60
 local TRACE_MAX_ENTRIES = 25
 
 local function EnsureDB()
@@ -224,10 +252,17 @@ local function scanSellerInvoices()
 	return bag, sample
 end
 
+local function copperToGoldString(copper)
+	if not copper then
+		return "?"
+	end
+	return string.format("%.2fg", copper / 10000)
+end
+
 local function recordSale(invoice)
 	local count = invoice.count or 1
 	local totalSalePrice = invoice.bid or 0
-	table.insert(WowAHTrackerSalesDB.sales, {
+	local record = {
 		itemName = invoice.itemName,
 		itemId = findTrackedItemId(invoice.itemName),
 		count = count,
@@ -241,7 +276,9 @@ local function recordSale(invoice)
 		realm = GetRealmName(),
 		character = UnitName("player"),
 		capturedAt = date("%Y-%m-%dT%H:%M:%S"),
-	})
+	}
+	table.insert(WowAHTrackerSalesDB.sales, record)
+	return record
 end
 
 -- Forgets any signature not actually seen (a live count for it in this
@@ -275,6 +312,25 @@ local function appendTrace(now, numItems, currentBag, newlyLogged)
 	end
 end
 
+-- Prints the instant a capture happens, in addition to the persisted
+-- trace - added 2026-09-17 after the Vial of the Sands incident, where the
+-- rolling /waht salesdebug buffer had already scrolled past the actual
+-- over-count moment by the time it was checked. This is the thing to
+-- watch during the next real sale: it should print exactly once per
+-- physical sale, never more.
+local function announceCapture(record)
+	printMsg(
+		string.format(
+			"CAPTURED: %s x%d, net %s, buyer %s (%s)",
+			record.itemName or "?",
+			record.count or 1,
+			copperToGoldString(record.netReceived),
+			(record.buyer and record.buyer ~= "") and record.buyer or "anonymous/unresolved",
+			record.capturedAt or "?"
+		)
+	)
+end
+
 local function scanForNewSales()
 	EnsureDB()
 	local currentBag, sample = scanSellerInvoices()
@@ -287,7 +343,7 @@ local function scanForNewSales()
 		local recordedCount = recorded and recorded.count or 0
 		if currentCount > recordedCount then
 			for _ = 1, currentCount - recordedCount do
-				recordSale(sample[sig])
+				announceCapture(recordSale(sample[sig]))
 				newlyLogged = newlyLogged + 1
 			end
 		end
@@ -296,13 +352,6 @@ local function scanForNewSales()
 
 	pruneExpiredSignatures(seen, now)
 	appendTrace(now, GetInboxNumItems(), currentBag, newlyLogged)
-end
-
-local function copperToGoldString(copper)
-	if not copper then
-		return "?"
-	end
-	return string.format("%.2fg", copper / 10000)
 end
 
 local function printSales()
