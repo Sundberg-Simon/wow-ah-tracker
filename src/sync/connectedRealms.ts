@@ -7,6 +7,8 @@ import type {
 export interface ConnectedRealmSummary {
   connectedRealmId: number;
   realms: { id: number; slug: string; name: string }[];
+  population: string | null;
+  status: string | null;
 }
 
 function extractIdFromHref(href: string): number {
@@ -36,5 +38,7 @@ export async function fetchConnectedRealm(
   return {
     connectedRealmId: detail.id,
     realms: detail.realms.map((r) => ({ id: r.id, slug: r.slug, name: r.name })),
+    population: detail.population?.type ?? null,
+    status: detail.status?.type ?? null,
   };
 }

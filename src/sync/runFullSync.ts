@@ -26,6 +26,8 @@ const REALM_CONCURRENCY = 6;
 interface RealmResult {
   connectedRealmId: number;
   realmNames: string[];
+  population: string | null;
+  status: string | null;
   observations: PriceObservation[];
 }
 
@@ -88,11 +90,13 @@ async function commitRun(
   try {
     for (const realm of realms) {
       await client.query(
-        `INSERT INTO connected_realms (connected_realm_id, realm_names, last_synced_at)
-         VALUES ($1, $2, $3)
+        `INSERT INTO connected_realms (connected_realm_id, realm_names, last_synced_at, population, status)
+         VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (connected_realm_id) DO UPDATE SET
            realm_names = EXCLUDED.realm_names,
            last_synced_at = EXCLUDED.last_synced_at,
+           population = EXCLUDED.population,
+           status = EXCLUDED.status,
            -- Record when Blizzard changed the group's membership (merge/split),
            -- so a jump in a realm's time series can be explained later.
            names_changed_at = CASE
@@ -100,7 +104,7 @@ async function commitRun(
              THEN EXCLUDED.last_synced_at
              ELSE connected_realms.names_changed_at
            END`,
-        [realm.connectedRealmId, realm.realmNames, capturedAt],
+        [realm.connectedRealmId, realm.realmNames, capturedAt, realm.population, realm.status],
       );
     }
 
@@ -207,6 +211,8 @@ export async function runFullSync(force = false): Promise<void> {
         return {
           connectedRealmId: id,
           realmNames: realm.realms.map((r) => r.name),
+          population: realm.population,
+          status: realm.status,
           observations,
         } satisfies RealmResult;
       } catch (err) {

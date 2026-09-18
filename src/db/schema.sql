@@ -68,3 +68,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS price_snapshots_run_item_realm_uidx
 ALTER TABLE connected_realms
   ADD COLUMN IF NOT EXISTS first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   ADD COLUMN IF NOT EXISTS names_changed_at TIMESTAMPTZ;
+
+-- Blizzard already returns these on the same per-connected-realm detail
+-- call already made every sync (no new API request) - previously fetched
+-- and discarded. population is a tier ("LOW"/"MEDIUM"/"HIGH"/"FULL", per
+-- Blizzard's own realm-list categories), status is realm up/down. Stored
+-- as-is rather than an enum: these are free-text values from Blizzard's
+-- API, not something this project defines or controls.
+ALTER TABLE connected_realms
+  ADD COLUMN IF NOT EXISTS population TEXT,
+  ADD COLUMN IF NOT EXISTS status TEXT;
