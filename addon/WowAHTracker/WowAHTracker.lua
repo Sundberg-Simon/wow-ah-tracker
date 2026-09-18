@@ -219,6 +219,11 @@ local COMMANDS = {
 		usage = "/waht salesdebug",
 		desc = "Show the last 25 mailbox scan traces, for diagnosing the sales log if something looks off.",
 	},
+	{ usage = "/waht purchases", desc = "Show recently captured AH purchases (count + last 10)." },
+	{
+		usage = "/waht purchasedebug",
+		desc = "Show the last 25 mailbox scan traces, for diagnosing the purchase log if something looks off.",
+	},
 	{ usage = "/waht realms", desc = "Open the realm roster - add this character and see EU connected-realm coverage." },
 	{ usage = "/waht help", desc = "List all commands (this)." },
 }
@@ -256,6 +261,18 @@ SlashCmdList["WOWAHTRACKER"] = function(msg)
 			WowAHTrackerSalesLog_PrintTrace()
 		else
 			printMsg("Sales log failed to load - check for a Lua error at login.")
+		end
+	elseif command == "purchases" then
+		if WowAHTrackerPurchaseLog_Print then
+			WowAHTrackerPurchaseLog_Print()
+		else
+			printMsg("Purchase log failed to load - check for a Lua error at login.")
+		end
+	elseif command == "purchasedebug" then
+		if WowAHTrackerPurchaseLog_PrintTrace then
+			WowAHTrackerPurchaseLog_PrintTrace()
+		else
+			printMsg("Purchase log failed to load - check for a Lua error at login.")
 		end
 	elseif command == "realms" then
 		if WowAHTrackerRealmRoster_Toggle then
