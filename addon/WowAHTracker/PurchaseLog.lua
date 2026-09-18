@@ -48,15 +48,23 @@
 -- same way SalesLog.lua's did before that was fixed. Stored on the record
 -- for display only.
 --
--- Dedup: identical high-water-mark + grace-window approach as
--- SalesLog.lua, for the identical reasons (see that file's extensive
--- comments for the two real bugs that shaped this) - a plain snapshot
--- diff isn't safe because a signature can flicker out of view (mailbox
--- closing, incremental inbox loading) and reappear, and a short grace
--- window actively causes re-logging rather than preventing it, since
--- ordinary mailbox usage (open, look, close, come back later) routinely
--- exceeds any short window. SIGNATURE_GRACE_SECONDS is the same 30 real
--- days, matching the invoice mail's own expiry.
+-- Dedup: identical confirmed-miss-streak design as SalesLog.lua (see that
+-- file's extensive comments for the full history - two real over-counting
+-- bugs, then a 2026-09-18 redesign, all found on the sales side and
+-- applied here from the start rather than rediscovered). Summary: a
+-- signature is forgotten once it's been actively checked for and NOT
+-- found, while the mailbox is verifiably open
+-- (C_PlayerInteractionManager.IsInteractingWithNpcOfType(Enum.
+-- PlayerInteractionType.MailInfo) - engine-level, UI-agnostic, not
+-- inferred from GetInboxNumItems() being zero, which is what caused the
+-- first redesign's bug since a closed mailbox and a genuinely empty one
+-- both report 0), MISS_THRESHOLD separate times, each at least
+-- MIN_MISS_INTERVAL_SECONDS apart (comfortably above the observed ~15s
+-- inbox-pagination-retry cadence, so multiple sub-samples of one refresh
+-- burst - mailbox-close teardown or a mid-session pagination catch-up -
+-- can only ever advance the streak by one tick). The 30-day
+-- SIGNATURE_GRACE_SECONDS wall-clock check is kept as an outer safety net
+-- only, not the primary aging path.
 --
 -- Signature = itemName + count + bid + realm + character (no deposit/
 -- consignment - those return slots aren't meaningful for a buyer invoice,
@@ -65,14 +73,17 @@
 -- same reason as the sales log: WowAHTrackerPurchaseDB is account-wide,
 -- and Simon runs ~81 characters across 3 accounts sharing 3 such tables.
 --
--- KNOWN REMAINING GAP, same shape as the sales log's: two genuinely
--- separate real purchases of the same item, at the same price, for the
--- same count, on the same character/realm, within the same ~30-day
--- window, would collapse into one record. Buying the identical
--- item/price/count twice within that window is plausible for an arbitrage
--- workflow (buying out the same cheap listing type repeatedly), so this
--- isn't purely theoretical - worth remembering if a future reconciliation
--- pass finds a real purchase missing from this log.
+-- KNOWN REMAINING GAP, same shape as the sales log's, now much narrower:
+-- two genuinely separate real purchases of the same item/price/count/
+-- character/realm would only collapse into one record if the first
+-- purchase's mail is still sitting there UNCLAIMED (never confirmed-
+-- missing at all) when the second, identical-signature purchase lands -
+-- bounded by real confirmed observation now, not a time window. Buying
+-- the identical item/price/count twice while the first receipt is still
+-- unclaimed is plausible for an arbitrage workflow (buying out the same
+-- cheap listing type repeatedly), so this isn't purely theoretical -
+-- worth remembering if a future reconciliation pass finds a real purchase
+-- missing from this log.
 --
 -- Item identification is name-only (GetInboxInvoiceInfo has no itemID/
 -- itemLink return at all) - same best-effort, same classic-suffix caveat
@@ -88,7 +99,17 @@ local function printMsg(msg)
 end
 
 local SIG_SEP = "\30"
+-- Outer safety-net backstop only (see the dedup note above) - 30 real
+-- days, matching the Auction House invoice mail's own expiry. The
+-- confirmed-miss-streak mechanism below is the primary aging path.
 local SIGNATURE_GRACE_SECONDS = 30 * 24 * 60 * 60
+-- How many separate, time-separated confirmed-absent checks it takes to
+-- forget a signature.
+local MISS_THRESHOLD = 2
+-- Minimum real time between two miss ticks counting as "separate" - well
+-- above the observed ~15s inbox-pagination-retry cadence, so multiple
+-- sub-samples of one refresh burst can only ever contribute one tick.
+local MIN_MISS_INTERVAL_SECONDS = 90
 local TRACE_MAX_ENTRIES = 25
 
 local function EnsureDB()
@@ -177,19 +198,37 @@ local function recordPurchase(invoice)
 	return record
 end
 
--- Forgets any signature not actually seen for more than the grace window -
--- see the dedup rationale above (mirrors SalesLog.lua's
--- pruneExpiredSignatures exactly, including the same GetTime()-rollback
--- guard for a full client restart, not just /reload).
-local function pruneExpiredSignatures(seen, now)
+-- Ages every tracked signature by one scan's worth of evidence, and
+-- forgets it once either aging path allows it (mirrors SalesLog.lua's
+-- ageSignatures exactly - see that file's "REDESIGNED 2026-09-18" note
+-- for the full reasoning):
+--   - Confirmed-miss-streak (primary): for a signature NOT in this scan's
+--     currentBag, only count a miss if the mailbox is verifiably open
+--     (mailboxOpen) AND at least MIN_MISS_INTERVAL_SECONDS has passed
+--     since the last counted miss for it.
+--   - Wall-clock backstop (outer safety net): `now < info.lastSeenAt`
+--     guards a rollback of GetTime() (a full game client restart, not
+--     just /reload - GetTime() doesn't reset on /reload).
+local function ageSignatures(seen, currentBag, mailboxOpen, now)
 	for sig, info in pairs(seen) do
-		if now < info.lastSeenAt or (now - info.lastSeenAt) > SIGNATURE_GRACE_SECONDS then
-			seen[sig] = nil
+		if not currentBag[sig] then
+			if mailboxOpen and (info.lastMissAt == nil or (now - info.lastMissAt) >= MIN_MISS_INTERVAL_SECONDS) then
+				info.missStreak = (info.missStreak or 0) + 1
+				info.lastMissAt = now
+			end
+		end
+
+		if seen[sig] then
+			local confirmedGone = (info.missStreak or 0) >= MISS_THRESHOLD
+			local backstopExpired = now < info.lastSeenAt or (now - info.lastSeenAt) > SIGNATURE_GRACE_SECONDS
+			if confirmedGone or backstopExpired then
+				seen[sig] = nil
+			end
 		end
 	end
 end
 
-local function appendTrace(now, numItems, currentBag, newlyLogged)
+local function appendTrace(now, numItems, currentBag, mailboxOpen, newlyLogged)
 	local sigSummaries = {}
 	for sig, count in pairs(currentBag) do
 		table.insert(sigSummaries, count > 1 and (sig .. " x" .. count) or sig)
@@ -198,6 +237,7 @@ local function appendTrace(now, numItems, currentBag, newlyLogged)
 		at = date("%H:%M:%S"),
 		gameTime = now,
 		numItems = numItems,
+		mailboxOpen = mailboxOpen,
 		buyerSignatures = sigSummaries,
 		newlyLogged = newlyLogged,
 	})
@@ -228,6 +268,7 @@ local function scanForNewPurchases()
 	local currentBag, sample = scanBuyerInvoices()
 	local seen = WowAHTrackerPurchaseDB.seenSignatures
 	local now = GetTime()
+	local mailboxOpen = C_PlayerInteractionManager.IsInteractingWithNpcOfType(Enum.PlayerInteractionType.MailInfo)
 	local newlyLogged = 0
 
 	for sig, currentCount in pairs(currentBag) do
@@ -239,11 +280,11 @@ local function scanForNewPurchases()
 				newlyLogged = newlyLogged + 1
 			end
 		end
-		seen[sig] = { count = math.max(currentCount, recordedCount), lastSeenAt = now }
+		seen[sig] = { count = math.max(currentCount, recordedCount), lastSeenAt = now, missStreak = 0, lastMissAt = nil }
 	end
 
-	pruneExpiredSignatures(seen, now)
-	appendTrace(now, GetInboxNumItems(), currentBag, newlyLogged)
+	ageSignatures(seen, currentBag, mailboxOpen, now)
+	appendTrace(now, GetInboxNumItems(), currentBag, mailboxOpen, newlyLogged)
 end
 
 local function printPurchases()
@@ -274,10 +315,11 @@ local function printTrace()
 	for _, entry in ipairs(trace) do
 		DEFAULT_CHAT_FRAME:AddMessage(
 			string.format(
-				"  %s (t=%.2f) numItems=%d buyerInvoices=%d newlyLogged=%d",
+				"  %s (t=%.2f) numItems=%d mailboxOpen=%s buyerInvoices=%d newlyLogged=%d",
 				entry.at or "?",
 				entry.gameTime or 0,
 				entry.numItems or 0,
+				tostring(entry.mailboxOpen),
 				#(entry.buyerSignatures or {}),
 				entry.newlyLogged or 0
 			)
