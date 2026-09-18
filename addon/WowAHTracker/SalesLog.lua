@@ -126,32 +126,72 @@
 -- exactly matching both incidents (N logs = N mailbox visits more than a
 -- minute apart while the mail sat unclaimed, /reload or not).
 --
--- Fixed by raising SIGNATURE_GRACE_SECONDS to the mail system's own 30-day
--- invoice expiry instead of an arbitrary short window - a real invoice
--- mail cannot still exist past that point regardless, so it's a genuine
--- upper bound rather than a guess, and it comfortably covers any realistic
--- gap between mailbox visits for mail that's still actually sitting there.
+-- First fixed (2026-09-17) by raising SIGNATURE_GRACE_SECONDS to the mail
+-- system's own 30-day invoice expiry instead of an arbitrary short window.
+-- That closed the over-counting bug but reopened the original gap nearly
+-- as wide as before: two genuinely separate real sales of the same item/
+-- price/count/character/realm within that same 30-day window would still
+-- collapse into one record - and for a manual flipper who routinely
+-- resells the same commodity at the same rounded price, that's not a rare
+-- coincidence, it's a realistic weekly occurrence (see the 2026-09-18
+-- code-review finding that prompted the redesign below).
 --
--- KNOWN REMAINING GAP (flagged rather than silently accepted, per Simon's
--- ask, and now back to roughly its original width - the 60s window turned
--- out to be actively harmful, not just narrow): two genuinely separate
--- real sales of the same item, same price, same count, same character AND
--- same realm, within the same ~30-day SIGNATURE_GRACE_SECONDS window of
--- each other, can still collapse into one record. Buyer name is NOT part
--- of the disambiguation any more (see the 2026-09-17 root-cause note
--- above - it's demonstrably unreliable, not just unavailable for
--- commodities), so this now applies across different buyers too. Given
--- the choice between this (a quiet, narrow undercount that a
--- reconciliation pass could in principle catch) and the over-counting
--- bugs actually observed twice tonight (loud, immediate, and would
--- silently inflate recorded revenue with nothing to prompt a second
--- look), biasing hard against over-counting is the right tradeoff here.
--- realm+character ARE part of the signature (see buildSignature) - with
--- ~81 characters sharing 3 accounts' worth of WowAHTrackerSalesDB tables,
--- two different characters selling the same item at the same price would
--- otherwise have collided constantly; this was a pure narrowing with no
--- downside, unlike dropping playerName. Worth remembering if a future
--- reconciliation pass ever finds a real AH sale that isn't in this log.
+-- REDESIGNED 2026-09-18: elapsed wall-clock time was never the right
+-- variable to age a signature on - the actual bug was mistaking "no
+-- visibility into the mailbox right now" for "confirmed gone". Replaced
+-- with a confirmed-miss-streak: a signature is only forgotten once it's
+-- been actively checked for and NOT found, while the mailbox is verifiably
+-- open, MISS_THRESHOLD separate times. "Verifiably open" uses
+-- C_PlayerInteractionManager.IsInteractingWithNpcOfType(Enum.
+-- PlayerInteractionType.MailInfo) - the same engine-level, UI-agnostic
+-- interaction tracking Blizzard's own default mail UI registers itself
+-- with (see MailFrame.lua's RegisterPlayerInteraction call) - rather than
+-- inferring "open" from GetInboxNumItems() being nonzero, which is exactly
+-- what caused the original bug (a closed mailbox and a genuinely empty one
+-- both report 0). A mail sitting unclaimed while the player is AFK at a
+-- still-open mailbox is never "missed" at all under this design, since
+-- it's still found every time it's checked - no reliance on how much real
+-- time has passed in either direction.
+--
+-- "Separate" miss ticks specifically means time-separated, not just
+-- distinct scans: MAIL_INBOX_UPDATE fires in rapid bursts even while the
+-- mailbox stays open (the client's own inbox pagination retry loop -
+-- MailFrame_RefreshInbox/InboxFrame_Update - re-requests more of the
+-- inbox roughly every ~15s while GetInboxNumItems() hasn't caught up to
+-- the server's real count yet, plausible often with this much mail
+-- traffic across 81 characters), not only during mailbox-close teardown.
+-- Whether each such retry transiently clears the already-loaded portion
+-- of the inbox before repopulating it is implemented in the client's
+-- native code and isn't visible from the Lua/XML UI source - genuinely
+-- unverifiable from here, not just unchecked. So a miss only counts if at
+-- least MIN_MISS_INTERVAL_SECONDS (90s, several times the observed ~15s
+-- retry cadence) has passed since the last counted miss for that
+-- signature - this makes the design correct regardless of which way that
+-- unverifiable engine behavior actually goes: multiple sub-samples of the
+-- same refresh burst (mailbox-close or mid-session pagination retry) can
+-- only ever advance the streak by one tick, never enough alone to reach
+-- MISS_THRESHOLD (2).
+--
+-- The 30-day wall-clock check is KEPT as an outer safety net, not the
+-- primary mechanism any more - if IsInteractingWithNpcOfType ever
+-- misbehaves in some case not foreseen here, a signature still can't get
+-- permanently stuck; it just falls back to the slower, previously-fixed
+-- behavior instead of hanging forever.
+--
+-- KNOWN REMAINING GAP, now much narrower: two genuinely separate real
+-- sales of the same item/price/count/character/realm, where the first
+-- mail is still sitting there UNCLAIMED (never confirmed-missing at all)
+-- when the second, identical-signature sale lands, would still collapse
+-- into one record - the multiset-count mechanism (0->2 raises the mark by
+-- 2, logged correctly) only breaks if the two occurrences aren't visible
+-- in overlapping scans, i.e. the first was already claimed before the
+-- second one appeared. That's now bounded by real confirmed observation
+-- rather than a time window, and is close to the original 2026-09-17
+-- "Naively keying..." caveat at the top of this section - a real API
+-- limitation, not a design defect. Buyer name is still not part of the
+-- disambiguation (unreliable, see above) and realm+character still are
+-- (~81 characters sharing 3 accounts' worth of these tables) - both
+-- unchanged by this redesign.
 --
 -- Item identification is name-only (GetInboxInvoiceInfo has no itemID/
 -- itemLink return at all) - findTrackedItemId() below opportunistically
@@ -173,12 +213,18 @@ local function printMsg(msg)
 end
 
 local SIG_SEP = "\30"
--- 30 real days, matching the Auction House invoice mail's own expiry - a
--- real invoice cannot still exist past that, so this is a genuine upper
--- bound rather than an arbitrary guess. See the 2026-09-17 "SECOND REAL
--- BUG" note above for why a short window (originally 60s) actively caused
--- duplicate logging instead of preventing it.
+-- Outer safety-net backstop only (see "REDESIGNED 2026-09-18" above) - 30
+-- real days, matching the Auction House invoice mail's own expiry, a
+-- genuine upper bound rather than an arbitrary guess. The confirmed-miss-
+-- streak mechanism below is the primary aging path now.
 local SIGNATURE_GRACE_SECONDS = 30 * 24 * 60 * 60
+-- How many separate, time-separated confirmed-absent checks it takes to
+-- forget a signature.
+local MISS_THRESHOLD = 2
+-- Minimum real time between two miss ticks counting as "separate" - well
+-- above the observed ~15s inbox-pagination-retry cadence, so multiple
+-- sub-samples of one refresh burst can only ever contribute one tick.
+local MIN_MISS_INTERVAL_SECONDS = 90
 local TRACE_MAX_ENTRIES = 25
 
 local function EnsureDB()
@@ -301,21 +347,40 @@ local function recordSale(invoice)
 	return record
 end
 
--- Forgets any signature not actually seen (a live count for it in this
--- scan) for more than the grace window - see the dedup rationale above.
--- `now < info.lastSeenAt` guards a rollback of GetTime() (a full game
--- client restart, not just /reload - GetTime() is system uptime and
--- doesn't reset on /reload) that would otherwise make the elapsed-time
--- check compute a bogus negative.
-local function pruneExpiredSignatures(seen, now)
+-- Ages every tracked signature by one scan's worth of evidence, and
+-- forgets it once either aging path says it's safe to (see "REDESIGNED
+-- 2026-09-18" above):
+--   - Confirmed-miss-streak (primary): for a signature NOT in this scan's
+--     currentBag, only count a miss if the mailbox is verifiably open
+--     (mailboxOpen) AND at least MIN_MISS_INTERVAL_SECONDS has passed
+--     since the last counted miss for it - this is what makes multiple
+--     scans within the same rapid refresh burst (mailbox-close teardown,
+--     or the ~15s inbox-pagination retry while still open) count as at
+--     most one tick, never enough alone to reach MISS_THRESHOLD.
+--   - Wall-clock backstop (outer safety net): `now < info.lastSeenAt`
+--     guards a rollback of GetTime() (a full game client restart, not
+--     just /reload - GetTime() is system uptime and doesn't reset on
+--     /reload) that would otherwise compute a bogus negative elapsed time.
+local function ageSignatures(seen, currentBag, mailboxOpen, now)
 	for sig, info in pairs(seen) do
-		if now < info.lastSeenAt or (now - info.lastSeenAt) > SIGNATURE_GRACE_SECONDS then
-			seen[sig] = nil
+		if not currentBag[sig] then
+			if mailboxOpen and (info.lastMissAt == nil or (now - info.lastMissAt) >= MIN_MISS_INTERVAL_SECONDS) then
+				info.missStreak = (info.missStreak or 0) + 1
+				info.lastMissAt = now
+			end
+		end
+
+		if seen[sig] then
+			local confirmedGone = (info.missStreak or 0) >= MISS_THRESHOLD
+			local backstopExpired = now < info.lastSeenAt or (now - info.lastSeenAt) > SIGNATURE_GRACE_SECONDS
+			if confirmedGone or backstopExpired then
+				seen[sig] = nil
+			end
 		end
 	end
 end
 
-local function appendTrace(now, numItems, currentBag, newlyLogged)
+local function appendTrace(now, numItems, currentBag, mailboxOpen, newlyLogged)
 	local sigSummaries = {}
 	for sig, count in pairs(currentBag) do
 		table.insert(sigSummaries, count > 1 and (sig .. " x" .. count) or sig)
@@ -324,6 +389,7 @@ local function appendTrace(now, numItems, currentBag, newlyLogged)
 		at = date("%H:%M:%S"),
 		gameTime = now,
 		numItems = numItems,
+		mailboxOpen = mailboxOpen,
 		sellerSignatures = sigSummaries,
 		newlyLogged = newlyLogged,
 	})
@@ -356,6 +422,7 @@ local function scanForNewSales()
 	local currentBag, sample = scanSellerInvoices()
 	local seen = WowAHTrackerSalesDB.seenSignatures
 	local now = GetTime()
+	local mailboxOpen = C_PlayerInteractionManager.IsInteractingWithNpcOfType(Enum.PlayerInteractionType.MailInfo)
 	local newlyLogged = 0
 
 	for sig, currentCount in pairs(currentBag) do
@@ -367,11 +434,11 @@ local function scanForNewSales()
 				newlyLogged = newlyLogged + 1
 			end
 		end
-		seen[sig] = { count = math.max(currentCount, recordedCount), lastSeenAt = now }
+		seen[sig] = { count = math.max(currentCount, recordedCount), lastSeenAt = now, missStreak = 0, lastMissAt = nil }
 	end
 
-	pruneExpiredSignatures(seen, now)
-	appendTrace(now, GetInboxNumItems(), currentBag, newlyLogged)
+	ageSignatures(seen, currentBag, mailboxOpen, now)
+	appendTrace(now, GetInboxNumItems(), currentBag, mailboxOpen, newlyLogged)
 end
 
 local function printSales()
@@ -402,10 +469,11 @@ local function printTrace()
 	for _, entry in ipairs(trace) do
 		DEFAULT_CHAT_FRAME:AddMessage(
 			string.format(
-				"  %s (t=%.2f) numItems=%d sellerInvoices=%d newlyLogged=%d",
+				"  %s (t=%.2f) numItems=%d mailboxOpen=%s sellerInvoices=%d newlyLogged=%d",
 				entry.at or "?",
 				entry.gameTime or 0,
 				entry.numItems or 0,
+				tostring(entry.mailboxOpen),
 				#(entry.sellerSignatures or {}),
 				entry.newlyLogged or 0
 			)
