@@ -106,5 +106,7 @@
   { "id": 67282, "name": "Elementium Geode", "category": "permanent", "active": true },
   { "id": 201385, "name": "Nokhud Centaur Warstaff", "category": "permanent", "active": true },
   { "id": 7961, "name": "Phantom Blade", "category": "permanent", "active": true },
-  { "id": 201378, "name": "Tuskarr Angler's Crossbow", "category": "permanent", "active": true }
+  { "id": 201378, "name": "Tuskarr Angler's Crossbow", "category": "permanent", "active": true },
+  { "id": 65891, "name": "Vial of the Sands", "category": "permanent", "active": true, "crafted": true, "est_cost_per_unit": null },
+  { "id": 95416, "name": "Sky Golem", "category": "permanent", "active": true, "crafted": true, "est_cost_per_unit": null }
 ]

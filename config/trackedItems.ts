@@ -19,6 +19,22 @@
  *                      because finding deals on specific server clusters
  *                      needs continuous price updates.
  *
+ * crafted / est_cost_per_unit (both OPTIONAL, report-only):
+ *   Orthogonal to category and to everything the sync does - the sync,
+ *   data.lua and the addon never read them. They exist only so the local
+ *   earnings report can show an ESTIMATED profit next to net earnings for
+ *   crafted items. Both are maintained by hand; there is deliberately no
+ *   automatic material-price tracking (a first, simple version - revisit only
+ *   if the manual estimate proves too crude).
+ *     crafted:           true if Simon crafts it (absent = false).
+ *     est_cost_per_unit: estimated cost to make/buy ONE unit, in GOLD (e.g.
+ *                        350 or 12.5), or null/absent when not set. The report
+ *                        shows profit = net earned - cost x units only where a
+ *                        cost is set, and "cost not set" for a crafted item
+ *                        without one - never net gold presented as profit.
+ *   These live in a file that is public (CLAUDE.md #8): a cost estimate you
+ *   type here is published if the file is pushed.
+ *
  * active:
  *   Independent of category. When false, the sync job skips this item
  *   entirely (no fresh rows written) and it should be hidden from any
@@ -40,6 +56,10 @@ export interface TrackedItem {
   name: string;
   category: "permanent" | "patch-specific";
   active: boolean;
+  /** Report-only, see the header comment. Absent = false. */
+  crafted?: boolean;
+  /** Report-only estimated cost of ONE unit, in gold; null/absent = not set. */
+  est_cost_per_unit?: number | null;
 }
 
 export const trackedItems: TrackedItem[] = JSON.parse(
