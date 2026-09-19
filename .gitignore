@@ -5,3 +5,5 @@ dist/
 *.log
 /reports/
 /.claude/
+/reports-private/
+/config/earningsAccounts.local.json

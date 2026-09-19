@@ -223,6 +223,66 @@ eftersom.]
     faktiska `modifiers`/`bonus_lists`-värden då (API:t exponerar dem för
     det moderna systemet) och utöka nyckelbildning bara om just det
     fallet kräver det — bygg inte generisk suffix-infrastruktur i förväg.
+13. **Egna intäkts-/köpdata är personlig data: enbart lokalt, ALDRIG via
+    Pages, ALDRIG genom det publika repot.** Bakgrund: addonets
+    sale/purchase-loggar (SavedVariables, bara på Simons dator) flyttades
+    2026-09-19 in i Neon för att kunna ge kontoöverskridande summor och
+    långa tidsfönster (1d…1y + all-time) som inte går att göra i spelet.
+    Repot och Pages är publika (#8), och intäkter per konto/realm/
+    karaktärsnamn är inte något som ska ut dit. Simon sa att tillfällig
+    publik exponering inte vore katastrofalt men såg ingen nackdel med
+    lokalt — beslutet blev lokalt, inte en öppen fråga att ompröva.
+    Konsekvenser, alla avsiktliga:
+    - **Väg in i DB:n**: `npm run ingest` (`scripts/ingestSavedVariables.ts`)
+      läser SavedVariables-filerna och skriver DIREKT till Neon från
+      Simons dator med hans lokala `.env` — aldrig via GitHub (inga
+      commits, Actions-artifacts eller issues med data; repot är publikt).
+      Tabeller: `earnings_sales`, `earnings_purchases`,
+      `roster_characters`, `earnings_ingest_runs`, `realm_population_history`.
+    - **Rapporten** (`npm run report:earnings`) skriver
+      `reports-private/earnings.html`, gitignorerad. Lägg ALDRIG
+      earnings-data i `scripts/report.ts`, `data.lua` eller något som
+      `sync.yml` laddar upp (`reports/`-mappen publiceras på Pages).
+    - **Kontomappsnamnen** (WTF\Account-mappar = Battle.net-identifierare)
+      ligger i `config/earningsAccounts.local.json` (gitignorerad; en
+      `.example.json` är incheckad), inte i koden — av samma skäl.
+    - **Cross-realm vs other klassas vid frågetillfället, aldrig som lagrad
+      kolumn.** Ett record är "cross-realm" om dess realm+karaktär finns i
+      `roster_characters` (SQL/aggregering joinar mot rostern som den ser ut
+      NU); allt annat är "other". Lägger Simon till en karaktär i rostern
+      flyttar dess redan loggade försäljningar retroaktivt till cross-realm.
+      Samma regel som i addonet (`/waht sales`). Lägg ALDRIG till en
+      `bucket`-kolumn eller cacha klassen på recordet — det fryser
+      klassificeringen och bryter kravet i tysthet.
+    - **Insert-only, idempotent**: inget raderas ur earnings-tabellerna
+      (att städa/nollställa en lokal SavedVariables-fil ska inte kunna
+      förlora historik). Identiska rader är legitima (N samtidiga
+      identiska försäljningar loggas som N rader med samma tidsstämpel),
+      därför ingår `dup_ordinal` i unik-nyckeln. En körning är
+      allt-eller-inget (en transaktion) och avbryts om någon filrad inte
+      återfinns i DB:n efteråt.
+    - **Mått**: "earned" = netto (`netReceived`: pris + återbetald deposit −
+      AH-avgift); inköp visas separat och dras ALDRIG av per realm (köp på
+      en realm, sälj på en annan — netto per realm skulle göra köp-realmer
+      till förlorare). Fönstren är rullande perioder som slutar "nu";
+      tidpunkten är `captured_at` = när addonet SÅG mailet, inte när
+      auktionen såldes. Realmer rankas per connected-realm-grupp (delar
+      ett auktionshus). Populationstier per försäljningstillfälle från
+      `realm_population_history` (skrivs i `runFullSync`s commit-transaktion
+      bakom en savepoint så den aldrig kan fälla en prissnapshot; bara
+      när en tier ändras; äldre records faller tillbaka på tidigast kända).
+    - **Trigger**: genvägen "WoW AH Tracker - Push Earnings" på skrivbordet
+      + den schemalagda uppgiften `WowAhTrackerPushEarnings` (dagligen
+      09:00, `StartWhenAvailable`) kör båda `scripts/windows/Push-Earnings.ps1`
+      = ingest och sedan rapportgenerering. WoW skriver SavedVariables
+      först vid logout eller `/reload` — filen ligger alltid efter spelet.
+      Uppgiften registreras med `Register-EarningsTask.ps1` (kräver en
+      UAC-höjning bara för registreringen, precis som `WowAhTrackerFetch`).
+    - **Låst lärdom (parsern)**: luaparse ger `StringLiteral.value = null`
+      i standardläget (bara `raw` är satt) trots att typerna säger
+      `string` — en naiv parse ger tyst `"null"` som nyckel överallt och
+      0 rader. Parsern läser därför råa bytes, kör `encodingMode:
+      "pseudo-latin1"` och avkodar UTF-8 själv (`src/earnings/savedVariables.ts`).
 
 ## Vad som är byggt och verifierat hittills
 - **Milestone 1**: OAuth-token, connected-realm-upplösning, per-realm-
@@ -358,8 +418,11 @@ eftersom.]
   som används, eftersom det läser samma underliggande spel-API. Bygg
   INTE detta ovanpå TSM:s interna accounting-data — den är odokumenterad
   och kan ändras utan varning mellan TSM-uppdateringar.
-- **Lokal HTML-nettorapport**: vinst per realm, per item och totalt,
-  byggd från den egna köp/sälj-loggen ovan (ingen extern hosting behövs).
+- **Lokal HTML-nettorapport — delvis byggd (se #13)**: intäktsrapporten
+  finns (`npm run report:earnings`: netto per tidsfönster, per konto, per
+  populationstier, bästa realm). Kvar att bygga, fråga först: vinst
+  (sälj minus köp) per item/totalt och koppling mellan köp och sälj av
+  samma vara.
 - **Per-patch-rapport**: tagga transaktioner med `GetBuildInfo()` vid
   loggningstillfället (inte manuellt underhållna patch-datumintervall).
   Visa flera "bästa"-listor (vinst, omsättning, volym, största enskilda

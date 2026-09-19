@@ -79,6 +79,102 @@ ALTER TABLE connected_realms
   ADD COLUMN IF NOT EXISTS population TEXT,
   ADD COLUMN IF NOT EXISTS status TEXT;
 
+-- ---------------------------------------------------------------------------
+-- Personal earnings data, ingested from the WoW addon's SavedVariables files
+-- (scripts/ingestSavedVariables.ts). Never touched by the sync pipeline and
+-- never published - the earnings report is local-only (see that script).
+--
+-- account is the WTF\Account folder name the record came from (the natural
+-- stable id); the human label ("Account 1" etc.) lives in
+-- config/earningsAccounts.ts, not here, so renaming never needs a migration.
+--
+-- Insert-only, never updated or deleted from: once ingested, the DB is the
+-- long-term store, so wiping/cleaning a local SavedVariables file can't lose
+-- history. Records have no unique id of their own and identical rows are
+-- legitimate (N simultaneous identical sales log as N rows with the same
+-- timestamp), so the unique key includes dup_ordinal - the row's rank among
+-- identical rows in that account's file - which makes re-ingesting the same
+-- file a no-op instead of a double-count.
+--
+-- captured_at is when the addon saw the mail, NOT when the auction sold
+-- (the addon records no sale time). It is stored as timestamptz, converted
+-- from the client's local wall-clock time by the ingest script - which runs on
+-- the same machine as WoW, so the local zone (and DST) is the right one.
+--
+-- The cross-realm/other split is deliberately NOT stored on these rows: it is
+-- computed at query time by joining realm_name+character_name to
+-- roster_characters, so adding a character to the roster reclassifies its
+-- past records (same rule as the in-game /waht sales split).
+CREATE TABLE IF NOT EXISTS earnings_sales (
+  id BIGSERIAL PRIMARY KEY,
+  account TEXT NOT NULL,
+  realm_name TEXT NOT NULL,
+  character_name TEXT NOT NULL,
+  item_name TEXT NOT NULL,
+  item_id INTEGER,
+  quantity INTEGER NOT NULL,
+  total_sale_copper BIGINT NOT NULL,
+  deposit_copper BIGINT,
+  consignment_copper BIGINT,
+  net_copper BIGINT NOT NULL,
+  buyer TEXT,
+  commerce_auction BOOLEAN,
+  captured_at TIMESTAMPTZ NOT NULL,
+  dup_ordinal INTEGER NOT NULL,
+  ingested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (account, realm_name, character_name, captured_at, item_name, quantity,
+          total_sale_copper, net_copper, dup_ordinal)
+);
+
+CREATE INDEX IF NOT EXISTS earnings_sales_captured_idx ON earnings_sales (captured_at);
+
+CREATE TABLE IF NOT EXISTS earnings_purchases (
+  id BIGSERIAL PRIMARY KEY,
+  account TEXT NOT NULL,
+  realm_name TEXT NOT NULL,
+  character_name TEXT NOT NULL,
+  item_name TEXT NOT NULL,
+  item_id INTEGER,
+  quantity INTEGER NOT NULL,
+  total_paid_copper BIGINT NOT NULL,
+  seller TEXT,
+  commerce_auction BOOLEAN,
+  captured_at TIMESTAMPTZ NOT NULL,
+  dup_ordinal INTEGER NOT NULL,
+  ingested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (account, realm_name, character_name, captured_at, item_name, quantity,
+          total_paid_copper, dup_ordinal)
+);
+
+CREATE INDEX IF NOT EXISTS earnings_purchases_captured_idx ON earnings_purchases (captured_at);
+
+-- Current-state snapshot of each account's realm roster (the "cross-realm
+-- stuff" definition), replaced per account on every ingest. Unlike the two
+-- tables above this is a snapshot, not history - it exists only so the
+-- cross-realm/other split can be computed in SQL against the roster as it
+-- stands now.
+CREATE TABLE IF NOT EXISTS roster_characters (
+  account TEXT NOT NULL,
+  realm_name TEXT NOT NULL,
+  character_name TEXT NOT NULL,
+  connected_realm_id INTEGER,
+  added_at TEXT,
+  PRIMARY KEY (account, realm_name, character_name)
+);
+
+-- One row per account per ingest: freshness/reconciliation trail so the
+-- report can show how stale each account's data is.
+CREATE TABLE IF NOT EXISTS earnings_ingest_runs (
+  id BIGSERIAL PRIMARY KEY,
+  account TEXT NOT NULL,
+  ingested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  source_file_modified_at TIMESTAMPTZ,
+  sales_in_file INTEGER NOT NULL,
+  purchases_in_file INTEGER NOT NULL,
+  sales_inserted INTEGER NOT NULL,
+  purchases_inserted INTEGER NOT NULL
+);
+
 -- Population tier history for the earnings report's "tier at time of sale"
 -- attribution. connected_realms only holds the current tier; this appends a
 -- row whenever a sync sees a realm's tier change (see runFullSync.ts), plus a
