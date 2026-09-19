@@ -10,7 +10,14 @@ import { pool } from "../src/db/pool.js";
 import { getSnapshotTrackedItems } from "../config/trackedItems.js";
 
 const WINDOW_HOURS = 24;
-const MIN_SUCCESSFUL_RUNS = 18; // 24 expected at ~hourly; tolerate a few dropped ticks
+// The workflow is scheduled every 15 min and the job self-throttles to ~hourly,
+// but GitHub drops most cron ticks on this repo, so the REAL cadence is far
+// lower than "hourly": measured 2026-09-13..19 over 115 hourly-sliding 24h
+// windows, 6-11 successful runs per window (median 8). 18 (the old value,
+// from the hourly assumption) failed every single window. 4 sits under the
+// observed minimum with headroom for a bad day, yet still catches a real
+// outage (well under half the normal cadence).
+const MIN_SUCCESSFUL_RUNS = 4;
 const MAX_GAP_MINUTES = 180;
 const MAX_STALE_SOURCE_RUNS = 3; // same Blizzard Last-Modified N runs in a row
 
@@ -92,7 +99,7 @@ async function main() {
   const problems: string[] = [];
 
   if (Number(s.successful) < MIN_SUCCESSFUL_RUNS) {
-    problems.push(`only ${s.successful} successful runs in ${WINDOW_HOURS}h (expected ~24)`);
+    problems.push(`only ${s.successful} successful runs in ${WINDOW_HOURS}h (expected at least ${MIN_SUCCESSFUL_RUNS}, typically 6-11)`);
   }
   if (Number(s.max_gap_min) > MAX_GAP_MINUTES) {
     problems.push(`max gap between successful runs ${Math.round(s.max_gap_min)}min`);
