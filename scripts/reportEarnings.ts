@@ -55,6 +55,31 @@ interface Freshness {
   fileSavedAt: Date | null;
 }
 
+/**
+ * Tracked items plus the hand-maintained, report-only economics fields
+ * (crafted, est_cost_per_unit). Strict on purpose: these are typed in by hand,
+ * and a typo like "350g" or -5 must fail this report loudly rather than be
+ * silently ignored or, worse, turn into a wrong profit figure. (Only this
+ * local report validates them - the sync never reads them, so a bad value can't
+ * affect collection.)
+ */
+function trackedItemRecs() {
+  return trackedItems.map((i) => {
+    const where = `config/trackedItems.json: "${i.name}" (${i.id})`;
+    const crafted = i.crafted === undefined ? false : i.crafted;
+    if (typeof crafted !== "boolean") {
+      throw new Error(`${where}: crafted must be true or false (or absent), got ${JSON.stringify(i.crafted)}`);
+    }
+    const cost = i.est_cost_per_unit === undefined ? null : i.est_cost_per_unit;
+    if (cost !== null && (typeof cost !== "number" || !Number.isFinite(cost) || cost < 0)) {
+      throw new Error(
+        `${where}: est_cost_per_unit must be a number of gold >= 0, or null when not set - got ${JSON.stringify(i.est_cost_per_unit)} (write 350, not "350g")`,
+      );
+    }
+    return { id: i.id, name: i.name, category: i.category, crafted, estCostPerUnitGold: cost };
+  });
+}
+
 async function loadInputs(now: Date) {
   const [sales, purchases, roster, realms, history, ingest, captures] = await Promise.all([
     pool.query("SELECT account, realm_name, character_name, captured_at, net_copper, item_name, item_id, quantity FROM earnings_sales"),
@@ -118,7 +143,7 @@ async function loadInputs(now: Date) {
       populationHistory,
       accounts: EARNINGS_ACCOUNTS.map((a) => a.folder) as string[],
       // ALL tracked items, inactive included, so a retired item's past sales still classify.
-      trackedItems: trackedItems.map((i) => ({ id: i.id, name: i.name, category: i.category })),
+      trackedItems: trackedItemRecs(),
       now,
     },
     freshness,
@@ -179,18 +204,35 @@ function bestRealmCell(b: NonNullable<ItemRow["bestRealm"]>): string {
 // One list of sold items. Rows carry their numbers as data-* attributes so the
 // page can re-sort them client-side (sales <-> net gold) without regenerating;
 // the server-side order is the default (sales, then net, then name).
+// The Est. profit cell. Three states, on purpose (see ItemProfit in aggregate.ts):
+// an estimate is marked with "≈" and explains itself on hover; a crafted item
+// with no cost says so in plain words rather than showing net as profit; an item
+// with nothing to estimate shows a dash.
+function profitCell(r: ItemRow): string {
+  if (r.profit.status === "estimated") {
+    const p = r.profit;
+    const formula = `Net earned ${gold(r.netCopper)} - ${r.units} unit(s) x ${gold(p.costPerUnitCopper)} estimated cost per unit (hand-set in config/trackedItems.json)`;
+    return `<td class="num${p.copper < 0 ? " neg" : ""}" title="${escapeHtml(formula)}">≈ ${gold(p.copper)}</td>`;
+  }
+  if (r.profit.status === "cost-not-set") {
+    return `<td class="num"><span class="warn" title="Flagged crafted, but est_cost_per_unit isn't set in config/trackedItems.json - so no profit is shown, not even net.">cost not set</span></td>`;
+  }
+  return `<td class="num muted">&ndash;</td>`;
+}
+
 function itemTable(rows: ItemRow[], emptyMessage: string): string {
   if (rows.length === 0) return `<p class="empty">${escapeHtml(emptyMessage)}</p>`;
   const body = rows
     .map(
       (r, i) =>
         `<tr data-sales="${r.salesCount}" data-net="${r.netCopper}" data-name="${escapeHtml(r.name.toLowerCase())}">` +
-        `<td class="num rank">${i + 1}</td><td>${escapeHtml(r.name)}</td>` +
+        `<td class="num rank">${i + 1}</td><td>${escapeHtml(r.name)}${r.crafted ? ' <span class="muted">(crafted)</span>' : ""}</td>` +
         `<td class="num">${r.salesCount}</td><td class="num">${r.units}</td><td class="num">${gold(r.netCopper)}</td>` +
+        `${profitCell(r)}` +
         `<td>${r.bestRealm ? bestRealmCell(r.bestRealm) : ""}</td></tr>`,
     )
     .join("");
-  return `<table class="items"><thead><tr><th class="num">#</th><th>Item</th><th class="num">Sales</th><th class="num">Units</th><th class="num">Net earned</th><th>Best realm</th></tr></thead><tbody>${body}</tbody></table>`;
+  return `<table class="items"><thead><tr><th class="num">#</th><th>Item</th><th class="num">Sales</th><th class="num">Units</th><th class="num">Net earned</th><th class="num" title="Net earned minus est. cost per unit x units - only where a cost is set">Est. profit</th><th>Best realm</th></tr></thead><tbody>${body}</tbody></table>`;
 }
 
 function itemsSectionHtml(r: SplitResult, hasPatchItems: boolean): string {
@@ -334,6 +376,7 @@ function buildHtml(report: EarningsReport, freshness: Freshness[]): string {
   .muted { color: var(--muted); font-weight: normal; font-size: 0.85em; }
   .empty { color: var(--muted); font-style: italic; }
   .warn { color: #d97706; font-size: 0.85em; }
+  td.neg { color: #dc2626; }
   ul.best { margin: 0.2rem 0; padding-left: 1.2rem; }
   .notes { color: var(--muted); font-size: 0.85em; border-top: 1px solid var(--line); margin-top: 2.5rem; padding-top: 1rem; }
   .notes li { margin-bottom: 0.3rem; }
@@ -363,6 +406,7 @@ function buildHtml(report: EarningsReport, freshness: Freshness[]): string {
     <li><strong>Windows</strong> are rolling periods ending when this report was generated (1 month = calendar month back). A record's time is when the addon <em>saw</em> the sale mail at a mailbox, not when the auction sold. All-time starts at the first captured record (2026-09-17).</li>
     <li><strong>Cross-realm vs other</strong> is decided each time this report is generated, against the realm roster as it stands now &mdash; adding a character to the roster moves its past sales into "Cross-realm".</li>
     <li><strong>Population tier</strong> is the realm's tier at the time of the sale where history exists; history only started 2026-09-19, so earlier sales use the earliest known tier.</li>
+    <li><strong>Est. profit</strong> (item lists) = net earned &minus; estimated cost per unit &times; units sold, shown only where a cost is set (<code>est_cost_per_unit</code>, gold per unit, in <code>config/trackedItems.json</code>). It is an <em>estimate</em> from a hand-maintained number &mdash; there is no material-price tracking &mdash; applied with today's estimate to every sale in the view. A crafted item with no cost set says &ldquo;cost not set&rdquo; instead of showing net as if it were profit; items with nothing to estimate show a dash.</li>
     <li><strong>Realms</strong> are ranked per connected-realm group (realms in a group share one auction house). Purchase spend is shown separately and not subtracted, since buying on one realm to sell on another would otherwise make buy-realms look like losses.</li>
   </ul>
 

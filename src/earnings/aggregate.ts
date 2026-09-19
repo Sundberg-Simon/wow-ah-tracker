@@ -63,6 +63,10 @@ export interface TrackedItemRec {
   id: number;
   name: string;
   category: "permanent" | "patch-specific";
+  /** Hand-maintained (config/trackedItems.json); report-only. */
+  crafted: boolean;
+  /** Estimated cost of ONE unit in gold, or null when Simon hasn't set one. */
+  estCostPerUnitGold: number | null;
 }
 
 export interface PurchaseRec {
@@ -115,6 +119,18 @@ export interface RealmRow {
 
 export type ItemGroup = "patch" | "permanent" | "untracked";
 
+/**
+ * What the report may say about an item's profit. Deliberately three states,
+ * so an unknown cost can never be shown as if net gold were profit:
+ *   estimated     - a cost per unit is set: profit = net - cost x units (an ESTIMATE)
+ *   cost-not-set  - flagged crafted but no cost set: say so, show no number
+ *   none          - not crafted and no cost: no profit figure applies
+ */
+export type ItemProfit =
+  | { status: "estimated"; copper: number; costPerUnitCopper: number }
+  | { status: "cost-not-set" }
+  | { status: "none" };
+
 export interface ItemRow {
   key: string;
   name: string;
@@ -122,6 +138,8 @@ export interface ItemRow {
   salesCount: number;
   units: number;
   netCopper: number;
+  crafted: boolean;
+  profit: ItemProfit;
   /** Where this item earned the most net gold (per connected-realm group), or null if it has no sales. */
   bestRealm: { label: string; members: string[]; netCopper: number; salesCount: number } | null;
 }
@@ -215,7 +233,7 @@ interface PreparedRecord {
   groupRealmName: string;
   members: string[];
   /** Sales only: which item, which list, how many units. */
-  item?: { key: string; label: string; group: ItemGroup; units: number };
+  item?: { key: string; label: string; group: ItemGroup; units: number; crafted: boolean; costPerUnitCopper: number | null };
 }
 
 function prepare(inputs: EarningsInputs): PreparedRecord[] {
@@ -240,8 +258,16 @@ function prepare(inputs: EarningsInputs): PreparedRecord[] {
   const itemFor = (s: SaleRec): PreparedRecord["item"] => {
     const tracked = (s.itemId !== null ? trackedById.get(s.itemId) : undefined) ?? trackedByName.get(normalizeItemName(s.itemName));
     return tracked
-      ? { key: `t:${tracked.id}`, label: tracked.name, group: tracked.category === "patch-specific" ? "patch" : "permanent", units: s.quantity }
-      : { key: `n:${normalizeItemName(s.itemName)}`, label: s.itemName, group: "untracked", units: s.quantity };
+      ? {
+          key: `t:${tracked.id}`,
+          label: tracked.name,
+          group: tracked.category === "patch-specific" ? "patch" : "permanent",
+          units: s.quantity,
+          crafted: tracked.crafted,
+          // gold -> copper, rounded to a whole copper (a manual estimate like 12.5g is exact anyway)
+          costPerUnitCopper: tracked.estCostPerUnitGold === null ? null : Math.round(tracked.estCostPerUnitGold * 10000),
+        }
+      : { key: `n:${normalizeItemName(s.itemName)}`, label: s.itemName, group: "untracked", units: s.quantity, crafted: false, costPerUnitCopper: null };
   };
 
   const make = (
@@ -322,6 +348,7 @@ function computeSplit(records: PreparedRecord[], split: Split, accounts: string[
 
   interface ItemAcc {
     row: ItemRow;
+    costPerUnitCopper: number | null;
     realms: Map<string, { label: string; members: string[]; netCopper: number; salesCount: number }>;
   }
   const itemMap = new Map<string, ItemAcc>();
@@ -331,7 +358,18 @@ function computeSplit(records: PreparedRecord[], split: Split, accounts: string[
       let acc = itemMap.get(rec.item.key);
       if (!acc) {
         acc = {
-          row: { key: rec.item.key, name: rec.item.label, group: rec.item.group, salesCount: 0, units: 0, netCopper: 0, bestRealm: null },
+          row: {
+            key: rec.item.key,
+            name: rec.item.label,
+            group: rec.item.group,
+            salesCount: 0,
+            units: 0,
+            netCopper: 0,
+            crafted: rec.item.crafted,
+            profit: { status: "none" }, // decided below, once units are summed
+            bestRealm: null,
+          },
+          costPerUnitCopper: rec.item.costPerUnitCopper,
           realms: new Map(),
         };
         itemMap.set(rec.item.key, acc);
@@ -379,6 +417,16 @@ function computeSplit(records: PreparedRecord[], split: Split, accounts: string[
       (a, b) => b.netCopper - a.netCopper || b.salesCount - a.salesCount || a.label.localeCompare(b.label),
     )[0];
     acc.row.bestRealm = best ?? null;
+    // The current hand-set estimate is applied to every unit sold in this view.
+    if (acc.costPerUnitCopper !== null) {
+      acc.row.profit = {
+        status: "estimated",
+        costPerUnitCopper: acc.costPerUnitCopper,
+        copper: acc.row.netCopper - acc.costPerUnitCopper * acc.row.units,
+      };
+    } else if (acc.row.crafted) {
+      acc.row.profit = { status: "cost-not-set" };
+    }
     items[acc.row.group].push(acc.row);
   }
   for (const list of Object.values(items)) {
