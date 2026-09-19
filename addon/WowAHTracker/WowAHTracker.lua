@@ -65,6 +65,39 @@ local function sortedItemIds(items)
 	return ids
 end
 
+-- One "EU min ..., median ... | your realm: ..." line for a single item.
+local function buildItemLine(itemId, item, myConnectedRealmId)
+	local line = string.format(
+		"%s: EU min %s, median %s",
+		item.name or ("item " .. tostring(itemId)),
+		copperToGoldString(item.euMinCopper),
+		copperToGoldString(item.euMedianCopper)
+	)
+
+	local myRow = findMyRealmRow(item, myConnectedRealmId)
+	if myRow then
+		local compareText
+		if item.euMinCopper and myRow.minPriceCopper <= item.euMinCopper then
+			compareText = "at or below EU min"
+		elseif item.euMinCopper then
+			compareText = copperToGoldString(myRow.minPriceCopper - item.euMinCopper) .. " above EU min"
+		else
+			compareText = "no EU min to compare against"
+		end
+		line = line
+			.. string.format(
+				" | your realm: %s (%s, qty %d)",
+				copperToGoldString(myRow.minPriceCopper),
+				compareText,
+				myRow.quantity or 0
+			)
+	elseif myConnectedRealmId then
+		line = line .. " | no listings on your realm right now"
+	end
+
+	return line
+end
+
 local function buildSummaryLines()
 	local lines = {}
 
@@ -91,37 +124,28 @@ local function buildSummaryLines()
 		)
 	end
 
+	-- Permanent items are tracked for sales only (CLAUDE.md #14): the sync
+	-- collects no price snapshots for them, so a line each would just be ~100
+	-- rows of "EU min ?" at every login. They stay in data.lua (name -> item id
+	-- resolution for /waht search and the sale/purchase logs needs them) but
+	-- are summarized in one count line instead. Only patch-specific items -
+	-- the ones that actually have prices - get a per-item line. (No goto:
+	-- WoW's Lua is 5.1.)
+	local salesOnlyCount = 0
 	for _, itemId in ipairs(sortedItemIds(WowAhTrackerData.items)) do
 		local item = WowAhTrackerData.items[itemId]
-		local line = string.format(
-			"%s: EU min %s, median %s",
-			item.name or ("item " .. tostring(itemId)),
-			copperToGoldString(item.euMinCopper),
-			copperToGoldString(item.euMedianCopper)
-		)
-
-		local myRow = findMyRealmRow(item, myConnectedRealmId)
-		if myRow then
-			local compareText
-			if item.euMinCopper and myRow.minPriceCopper <= item.euMinCopper then
-				compareText = "at or below EU min"
-			elseif item.euMinCopper then
-				compareText = copperToGoldString(myRow.minPriceCopper - item.euMinCopper) .. " above EU min"
-			else
-				compareText = "no EU min to compare against"
-			end
-			line = line
-				.. string.format(
-					" | your realm: %s (%s, qty %d)",
-					copperToGoldString(myRow.minPriceCopper),
-					compareText,
-					myRow.quantity or 0
-				)
-		elseif myConnectedRealmId then
-			line = line .. " | no listings on your realm right now"
+		if item.category == "permanent" then
+			salesOnlyCount = salesOnlyCount + 1
+		else
+			table.insert(lines, buildItemLine(itemId, item, myConnectedRealmId))
 		end
+	end
 
-		table.insert(lines, line)
+	if salesOnlyCount > 0 then
+		table.insert(
+			lines,
+			string.format("%d permanent item(s) tracked for sales only (no price snapshots).", salesOnlyCount)
+		)
 	end
 
 	return lines
