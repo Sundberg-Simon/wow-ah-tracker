@@ -531,6 +531,24 @@ efter att tillräckligt många schemalagda körningar hunnit samlas
 (~18 lyckade på 24h). Går den röd initialt är det förväntat tills
 kadensen stabiliserats — inte nödvändigtvis ett nytt fel.
 
+**Efter #14 (2026-09-19) — vad som INTE kan verifieras i skarp CI än**:
+synken är idle by design (inga patch-specifika items), så en schemalagd
+körning gör i praktiken bara en 20-timmars metadata-refresh eller ett
+"idle-skip". Verifierat i skarp CI: idle-skip (schemalagd tick 2026-09-19
+10:52Z, run 35438557780), metadata-refresh (forcerad dispatch,
+92/92 realmer), idle-läget i `health.yml`. INTE verifierat i CI sedan
+refaktoreringen: (1) själva snapshot-vägen (`commitRun` med delade
+helpers) — den är bara körd lokalt mot skarp DB med två temporärt
+patch-flaggade items (run 52, 132 rader, health grön i icke-idle-läge);
+(2) en metadata-refresh som utlöses av *schemat* (≥20 h efter förra) och
+inte av en forcerad dispatch. **Första gången ett patch-specifikt item
+läggs till**: pusha, kör `gh workflow run sync.yml -f force=true` och
+bekräfta i loggen att `Sync run N OK ... rows=<>0` skrivs (inte
+idle-raden), att `price_snapshots` bara växer för just de items, att
+deploy går grön och att `npm run health` (icke-idle) går grön; kolla sedan
+nästa schemalagda tick. Gör inte detta blint innan dess — det finns
+inget patch-item att köra det mot.
+
 **Addon/spelkod är ett specialfall**: `gh run list` säger ingenting om
 kod som körs i WoW-klienten. Ett addon eller ändring av det är ALDRIG
 "klart" förrän spelaren själv har startat om WoW eller kört `/reload`,
