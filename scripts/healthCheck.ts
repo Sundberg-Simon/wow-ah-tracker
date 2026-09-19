@@ -18,7 +18,13 @@ const WINDOW_HOURS = 24;
 // observed minimum with headroom for a bad day, yet still catches a real
 // outage (well under half the normal cadence).
 const MIN_SUCCESSFUL_RUNS = 4;
-const MAX_GAP_MINUTES = 180;
+// Used for BOTH the longest gap between successful runs inside the window and
+// how long ago the last successful run was. Same reasoning as
+// MIN_SUCCESSFUL_RUNS above: the old 180 (3h) assumed the theoretical hourly
+// schedule and failed every one of 115 sliding 24h windows (2026-09-13..19);
+// the worst real gap in that history was 415 min. 480 leaves margin over that
+// while still catching a genuine day-scale outage.
+const MAX_GAP_MINUTES = 480;
 const MAX_STALE_SOURCE_RUNS = 3; // same Blizzard Last-Modified N runs in a row
 
 // Must mirror runFullSync.ts's own MAX_FAILED_REALM_FRACTION (0.1): a run
