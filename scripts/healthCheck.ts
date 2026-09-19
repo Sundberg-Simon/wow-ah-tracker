@@ -7,6 +7,7 @@
  * if not - so the normal failed-run email actually fires.
  */
 import { pool } from "../src/db/pool.js";
+import { getSnapshotTrackedItems } from "../config/trackedItems.js";
 
 const WINDOW_HOURS = 24;
 const MIN_SUCCESSFUL_RUNS = 18; // 24 expected at ~hourly; tolerate a few dropped ticks
@@ -26,7 +27,38 @@ const MAX_FAILED_REALM_FRACTION = 0.1;
 const NEAR_CEILING_FRACTION = 0.8; // alarm once a run reaches 80% of the ceiling
 const SYSTEMIC_PARTIAL_RATE = 0.5; // alarm if over half of successful runs are partial
 
+// With no active patch-specific items the snapshot sync is idle BY DESIGN
+// (CLAUDE.md #14): no sync_runs rows, no price rows, so the cadence rules
+// below (>=18 runs/24h, max gap, stale Blizzard dump) would alarm forever.
+// The idle job's one remaining duty is refreshing realm metadata about daily
+// (runFullSync.ts, METADATA_MAX_AGE_MS = 20h) - so silence is still detected,
+// just against that: alarm if it hasn't happened for MAX_METADATA_AGE_HOURS.
+const MAX_METADATA_AGE_HOURS = 48;
+
+async function checkIdleMode(): Promise<void> {
+  const { rows } = await pool.query(
+    `SELECT extract(epoch FROM now() - max(last_synced_at)) / 3600 AS age_hours FROM connected_realms`,
+  );
+  const age = rows[0]?.age_hours === null || rows[0]?.age_hours === undefined ? null : Number(rows[0].age_hours);
+  console.log(
+    JSON.stringify({ mode: "idle (no active patch-specific items)", realm_metadata_age_hours: age === null ? null : Math.round(age * 10) / 10 }, null, 2),
+  );
+  if (age === null || age > MAX_METADATA_AGE_HOURS) {
+    console.log(
+      `::error::Sync health (idle mode): realm metadata not refreshed for ${age === null ? "ever" : Math.round(age) + "h"} (limit ${MAX_METADATA_AGE_HOURS}h) - the idle job's daily refresh isn't running.`,
+    );
+    process.exitCode = 1;
+  } else {
+    console.log("Sync health OK (idle mode: snapshot sync intentionally off, realm metadata is fresh).");
+  }
+}
+
 async function main() {
+  if (getSnapshotTrackedItems().length === 0) {
+    await checkIdleMode();
+    return;
+  }
+
   const { rows } = await pool.query(`
     WITH recent AS (
       SELECT * FROM sync_runs

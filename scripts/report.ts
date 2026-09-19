@@ -50,6 +50,25 @@ function median(values: number[]): number {
 /** One DB round-trip per item; both the HTML and Lua output render from this
  * same result set, so the two files can never disagree with each other. */
 async function gatherItemData(item: TrackedItem): Promise<ItemData> {
+  // Permanent items are sales-only (CLAUDE.md #14): the sync collects no
+  // snapshots for them, but old rows can still exist in the DB (e.g. from a
+  // one-off 108-item test run). Never present those as current prices - not in
+  // the HTML and not in data.lua - so return the no-data shape without even
+  // querying.
+  if (item.category !== "patch-specific") {
+    return {
+      id: item.id,
+      name: item.name,
+      category: item.category,
+      capturedAt: null,
+      euMinCopper: null,
+      euMedianCopper: null,
+      totalQuantity: 0,
+      realms: [],
+      history: [],
+    };
+  }
+
   const [{ capturedAt, rows }, history] = await Promise.all([
     getLatestPerRealmPrices(item.id),
     getEuWideHistory(item.id, { limit: 200 }),
@@ -187,7 +206,19 @@ function buildItemSectionHtml(data: ItemData): string {
 }
 
 function buildHtml(items: ItemData[]): string {
-  const sections = items.map(buildItemSectionHtml).join("\n");
+  // Only patch-specific items have price data (CLAUDE.md #14); permanent items
+  // are tracked for sales only and get no section here (they stay in data.lua,
+  // which the addon needs for name -> item id resolution).
+  const snapshotItems = items.filter((i) => i.category === "patch-specific");
+  const salesOnlyCount = items.length - snapshotItems.length;
+  const salesOnlyNote =
+    salesOnlyCount > 0
+      ? `<p class="muted">${salesOnlyCount} permanent item(s) are tracked for sales only - no price snapshots are collected for them.</p>`
+      : "";
+  const sections =
+    snapshotItems.length > 0
+      ? snapshotItems.map(buildItemSectionHtml).join("\n")
+      : `<p class="empty">No patch-specific items are being tracked right now, so there are no price snapshots to show.</p>`;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -216,6 +247,7 @@ function buildHtml(items: ItemData[]): string {
 <body>
   <h1>wow-ah-tracker</h1>
   <p class="generated">Generated ${renderTimestamp(new Date())}</p>
+  ${salesOnlyNote}
   ${sections}
   <script>
     document.querySelectorAll('time[data-iso]').forEach(function (el) {

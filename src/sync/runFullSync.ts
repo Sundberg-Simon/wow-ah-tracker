@@ -1,6 +1,6 @@
 import type pg from "pg";
 import { pool } from "../db/pool.js";
-import { getActiveTrackedItemIds } from "../../config/trackedItems.js";
+import { getSnapshotTrackedItemIds } from "../../config/trackedItems.js";
 import { fetchConnectedRealm, fetchConnectedRealmIds } from "./connectedRealms.js";
 import { recordPopulationChanges } from "./populationHistory.js";
 import {
@@ -23,6 +23,20 @@ const MAX_FAILED_REALM_FRACTION = 0.1;
 
 // If Blizzard is slow on one realm, don't let it hang the whole run.
 const REALM_CONCURRENCY = 6;
+
+// With no active patch-specific items there is nothing to snapshot (see
+// CLAUDE.md #14), but realm metadata - population tier, status, group
+// membership - still feeds the earnings report's tier history, and it changes
+// slowly. So the idle job refreshes it at most this often instead of on every
+// tick: ~93 realm-detail calls a day, no auction calls, no price rows.
+const METADATA_MAX_AGE_MS = 20 * 60 * 60 * 1000;
+
+interface RealmMetadata {
+  connectedRealmId: number;
+  realmNames: string[];
+  population: string | null;
+  status: string | null;
+}
 
 interface RealmResult {
   connectedRealmId: number;
@@ -77,6 +91,56 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
+/**
+ * Upserts connected-realm metadata (names, population, status). Shared by the
+ * snapshot commit and the metadata-only idle refresh so the two can't drift.
+ * Runs on the caller's transaction.
+ */
+async function upsertConnectedRealms(
+  client: pg.PoolClient,
+  realms: RealmMetadata[],
+  capturedAt: Date,
+): Promise<void> {
+  for (const realm of realms) {
+    await client.query(
+      `INSERT INTO connected_realms (connected_realm_id, realm_names, last_synced_at, population, status)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (connected_realm_id) DO UPDATE SET
+         realm_names = EXCLUDED.realm_names,
+         last_synced_at = EXCLUDED.last_synced_at,
+         population = EXCLUDED.population,
+         status = EXCLUDED.status,
+         -- Record when Blizzard changed the group's membership (merge/split),
+         -- so a jump in a realm's time series can be explained later.
+         names_changed_at = CASE
+           WHEN connected_realms.realm_names IS DISTINCT FROM EXCLUDED.realm_names
+           THEN EXCLUDED.last_synced_at
+           ELSE connected_realms.names_changed_at
+         END`,
+      [realm.connectedRealmId, realm.realmNames, capturedAt, realm.population, realm.status],
+    );
+  }
+}
+
+/**
+ * Secondary feature (earnings report's "tier at time of sale") - must never
+ * be able to sink the commit it rides along with, hence the savepoint: a
+ * failure here is logged and skipped, not propagated.
+ */
+async function recordPopulationChangesSafely(client: pg.PoolClient, capturedAt: Date): Promise<void> {
+  await client.query("SAVEPOINT population_history");
+  try {
+    const appended = await recordPopulationChanges(client, capturedAt);
+    if (appended > 0) {
+      console.log(`Recorded ${appended} realm population tier change(s).`);
+    }
+    await client.query("RELEASE SAVEPOINT population_history");
+  } catch (err) {
+    await client.query("ROLLBACK TO SAVEPOINT population_history");
+    console.warn("Population history update failed (skipped, sync unaffected):", err);
+  }
+}
+
 async function commitRun(
   client: pg.PoolClient,
   runId: number,
@@ -89,40 +153,8 @@ async function commitRun(
 ): Promise<void> {
   await client.query("BEGIN");
   try {
-    for (const realm of realms) {
-      await client.query(
-        `INSERT INTO connected_realms (connected_realm_id, realm_names, last_synced_at, population, status)
-         VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (connected_realm_id) DO UPDATE SET
-           realm_names = EXCLUDED.realm_names,
-           last_synced_at = EXCLUDED.last_synced_at,
-           population = EXCLUDED.population,
-           status = EXCLUDED.status,
-           -- Record when Blizzard changed the group's membership (merge/split),
-           -- so a jump in a realm's time series can be explained later.
-           names_changed_at = CASE
-             WHEN connected_realms.realm_names IS DISTINCT FROM EXCLUDED.realm_names
-             THEN EXCLUDED.last_synced_at
-             ELSE connected_realms.names_changed_at
-           END`,
-        [realm.connectedRealmId, realm.realmNames, capturedAt, realm.population, realm.status],
-      );
-    }
-
-    // Secondary feature (earnings report's "tier at time of sale") - must never
-    // be able to sink the price snapshot commit it rides along with, hence the
-    // savepoint: a failure here is logged and skipped, not propagated.
-    await client.query("SAVEPOINT population_history");
-    try {
-      const appended = await recordPopulationChanges(client, capturedAt);
-      if (appended > 0) {
-        console.log(`Recorded ${appended} realm population tier change(s).`);
-      }
-      await client.query("RELEASE SAVEPOINT population_history");
-    } catch (err) {
-      await client.query("ROLLBACK TO SAVEPOINT population_history");
-      console.warn("Population history update failed (skipped, price sync unaffected):", err);
-    }
+    await upsertConnectedRealms(client, realms, capturedAt);
+    await recordPopulationChangesSafely(client, capturedAt);
 
     const all = [...commodityObservations, ...realms.flatMap((r) => r.observations)];
     // Chunk to stay well under Postgres' 65535 bind-parameter limit.
@@ -176,6 +208,75 @@ async function commitRun(
 }
 
 /**
+ * The no-patch-items mode: no auction calls, no price rows, no sync_runs row
+ * (health.yml's cadence rules apply to snapshot runs and switch to an
+ * idle-mode check when there are none - see scripts/healthCheck.ts). Just
+ * refreshes connected-realm metadata, at most every METADATA_MAX_AGE_MS,
+ * inside one transaction with the same failed-realm tolerance as a real sync.
+ */
+async function refreshRealmMetadataOnly(now: Date, force: boolean): Promise<void> {
+  const { rows } = await pool.query(`SELECT max(last_synced_at) AS last FROM connected_realms`);
+  const last: Date | null = rows[0]?.last ?? null;
+  if (!force && last && now.getTime() - last.getTime() < METADATA_MAX_AGE_MS) {
+    const hours = ((now.getTime() - last.getTime()) / 3600000).toFixed(1);
+    console.log(
+      `Snapshot sync idle (no active patch-specific items); realm metadata refreshed ${hours}h ago (< 20h). No API calls, no DB writes.`,
+    );
+    return;
+  }
+
+  console.log(
+    "Snapshot sync idle (no active patch-specific items): refreshing realm metadata only - no auction calls, no price rows.",
+  );
+  const connectedRealmIds = await fetchConnectedRealmIds();
+  const failedRealmIds: number[] = [];
+  const results = await mapWithConcurrency(connectedRealmIds, REALM_CONCURRENCY, async (id) => {
+    try {
+      const realm = await fetchConnectedRealm(id);
+      if (realm.connectedRealmId !== id) {
+        throw new Error(`Index said ${id} but detail endpoint returned ${realm.connectedRealmId}`);
+      }
+      return {
+        connectedRealmId: id,
+        realmNames: realm.realms.map((r) => r.name),
+        population: realm.population,
+        status: realm.status,
+      } satisfies RealmMetadata;
+    } catch (err) {
+      failedRealmIds.push(id);
+      console.log(`::warning::Connected realm ${id} failed, continuing: ${String(err).slice(0, 300)}`);
+      return null;
+    }
+  });
+  const realms = results.filter((r): r is RealmMetadata => r !== null);
+
+  const maxFailed = Math.ceil(connectedRealmIds.length * MAX_FAILED_REALM_FRACTION);
+  if (failedRealmIds.length > maxFailed) {
+    throw new Error(
+      `${failedRealmIds.length}/${connectedRealmIds.length} realms failed (limit ${maxFailed}) - not writing realm metadata this run.`,
+    );
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    try {
+      await upsertConnectedRealms(client, realms, now);
+      await recordPopulationChangesSafely(client, now);
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    }
+  } finally {
+    client.release();
+  }
+  console.log(
+    `Realm metadata refreshed: realms=${realms.length}/${connectedRealmIds.length} failed=[${failedRealmIds.join(",")}] (idle mode: no snapshot rows written).`,
+  );
+}
+
+/**
  * Runs one full sync pass: resolve the live EU connected-realm list, fetch
  * the region-wide commodities dump once, then fetch every connected realm's
  * itemized auction dump (bounded concurrency) - filtering each down to the
@@ -185,6 +286,16 @@ async function commitRun(
  */
 export async function runFullSync(force = false): Promise<void> {
   const now = new Date();
+
+  // Only patch-specific items get auction snapshots (CLAUDE.md #14). With none
+  // configured, skip every auction call and write no price rows - the job
+  // degrades to an occasional realm-metadata refresh instead.
+  const trackedIds = new Set(getSnapshotTrackedItemIds());
+  if (trackedIds.size === 0) {
+    await refreshRealmMetadataOnly(now, force);
+    return;
+  }
+
   const lastSuccess = await getLastSuccessfulSyncStartedAt();
   const elapsedMs = lastSuccess ? now.getTime() - lastSuccess.getTime() : null;
   const gapMinutes = elapsedMs === null ? null : Math.round(elapsedMs / 60000);
@@ -200,12 +311,6 @@ export async function runFullSync(force = false): Promise<void> {
   if (gapMinutes !== null && gapMinutes > 120) {
     // Shows as a warning annotation on the Actions run; also stored on the row.
     console.log(`::warning::Gap of ${gapMinutes}min since last successful sync - dropped ticks or an outage.`);
-  }
-
-  const trackedIds = new Set(getActiveTrackedItemIds());
-  if (trackedIds.size === 0) {
-    console.log("No active tracked items - nothing to sync.");
-    return;
   }
 
   const runId = await startSyncRun(now, gapMinutes);

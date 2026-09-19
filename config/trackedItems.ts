@@ -7,9 +7,17 @@
  * processing a pasted export block from the in-game categorizer - see
  * addon/WowAHTracker/Categorizer.lua) than mutating TS array syntax.
  *
- * category:
- *   "permanent"     - tracked indefinitely, patch after patch
- *   "patch-specific" - tied to the current patch/content cycle
+ * category (also decides WHAT is collected - CLAUDE.md #14):
+ *   "permanent"      - long-hold items, bought cheap on a patch and sold
+ *                      100-1000x later. Price fluctuations don't matter, so
+ *                      they get NO auction-snapshot collection at all: only
+ *                      the addon's own sale/purchase logs (amount + realm)
+ *                      cover them. The sync never fetches or stores prices
+ *                      for these.
+ *   "patch-specific" - tied to the current patch/content cycle. The ONLY
+ *                      items the auction-snapshot sync fetches and stores,
+ *                      because finding deals on specific server clusters
+ *                      needs continuous price updates.
  *
  * active:
  *   Independent of category. When false, the sync job skips this item
@@ -44,4 +52,18 @@ export function getActiveTrackedItems(): TrackedItem[] {
 
 export function getActiveTrackedItemIds(): number[] {
   return getActiveTrackedItems().map((item) => item.id);
+}
+
+/**
+ * The items the auction-snapshot sync actually fetches and stores: active AND
+ * patch-specific. Permanent items are sales-only (see the category docs
+ * above) and are deliberately excluded here - with none of these configured
+ * the sync makes no auction calls and writes no price rows.
+ */
+export function getSnapshotTrackedItems(): TrackedItem[] {
+  return getActiveTrackedItems().filter((item) => item.category === "patch-specific");
+}
+
+export function getSnapshotTrackedItemIds(): number[] {
+  return getSnapshotTrackedItems().map((item) => item.id);
 }
