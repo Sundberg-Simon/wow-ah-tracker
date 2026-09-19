@@ -70,6 +70,16 @@ eftersom.]
    bara sluta synka/visa det framåt i tiden — historik som redan finns
    ska ALDRIG raderas, och avstängning ska aldrig kräva en
    schemamigrering (fälten finns redan i schemat).
+   **Förtydligande 2026-09-19 — vad "historik som aldrig raderas"
+   omfattar**: det gäller **sälj-/transaktionsdata** (addonets
+   sale/purchase-loggar och `earnings_*`-tabellerna, se #13) — den är
+   Simons egen, oersättliga bokföring och rensas/tunnas aldrig. Det gäller
+   INTE transienta **auktionssnapshots** (`price_snapshots`): de är en
+   löpande observation av marknaden, inte en bokföring, och får tunnas ut
+   (t.ex. rullas upp till dagliga/veckovisa aggregat efter en viss tid) när
+   lagringen kräver det. Att stänga av ett item (`active: false`) raderar
+   fortfarande aldrig något; det är tunnandet som är den uttryckliga,
+   separata operationen (`scripts/rollupSnapshots.ts`, se #14).
 5. **Ingen full auktionshusprodukt.** Inga användarkonton, ingen auth
    utöver att jag själv kör det, inget multi-tenant, ingen publik
    ambition. Håll infrastrukturen på gratis/hobby-nivå.
@@ -283,6 +293,48 @@ eftersom.]
       `string` — en naiv parse ger tyst `"null"` som nyckel överallt och
       0 rader. Parsern läser därför råa bytes, kör `encodingMode:
       "pseudo-latin1"` och avkodar UTF-8 själv (`src/earnings/savedVariables.ts`).
+
+14. **`category` styr VAD som samlas in: permanenta items = enbart
+    försäljningsdata, patch-specifika items = auktionssnapshots.**
+    Bakgrund 2026-09-19: alla 108 tracked items är permanenta (long-hold,
+    okänsliga för prisfluktuationer: köps billigt på en patch, säljs
+    100–1000x senare); inga patch-specifika finns än. Snapshot-syncen för
+    108 items är ~8 500 rader/körning ≈ 13 MB/dygn (uppmätt: ~8 körningar/
+    dygn, 189 byte/rad inkl. index) — Neon-gratistiern (0,5 GB) hade varit
+    full på ~39 dagar, och permanenta items har ingen nytta av datan.
+    - **Inget nytt `tracking_mode`-fält**: `category` i
+      `config/trackedItems.json` ÄR läget (ett andra fält kunde divergera
+      från det). Ingen backfill behövdes — alla 108 var redan
+      `permanent`. Inte ett DB-schema-fält (listan ligger i en incheckad fil).
+    - **Snapshot-syncen** (`runFullSync`) hämtar och skriver ENBART för
+      aktiva `patch-specific` items (`getSnapshotTrackedItems()`). Med noll
+      sådana: inga auktionsanrop, inga prisrader, ingen `sync_runs`-rad. Jobbet
+      gör då bara en metadata-refresh av `connected_realms` (population/
+      status, ~93 realm-detaljanrop, högst var 20:e timme) så att
+      populationshistoriken från #13 fortsätter. Lägg INTE till permanenta
+      items i snapshot-syncen "för säkerhets skull" — det återskapar
+      tillväxten beslutet undviker. Vill man följa priset på ett permanent
+      item: gör det patch-specifikt (eller fråga).
+    - **Försäljnings-/köp-pipelinen** (addon → SavedVariables → `npm run
+      ingest`) påverkas inte och gäller alla items oavsett kategori.
+    - **Yta**: permanenta items stannar i `data.lua` (addonets namn→id-
+      uppslag för `/waht search` och sale/purchase-loggarna behöver dem) men
+      utan prisdata; `report.ts` visar prissektioner bara för patch-
+      specifika och visar aldrig äldre snapshotrader för permanenta (t.ex. de
+      ~8 500 raderna från 2026-09-18-testkörningen ligger kvar i DB:n men
+      exponeras aldrig). Addonets inloggningssammanfattning hoppar
+      permanenta items (en räkneraderad istället för ~100 rader).
+    - **`healthCheck.ts`** har ett idle-läge utan patch-items: kadensreglerna
+      (≥18 körningar/24h m.m.) gäller snapshot-körningar och skulle annars
+      larma för evigt; istället kontrolleras att metadata-refreshen skett
+      senaste 48 h. KÄNT PROBLEM: `MIN_SUCCESSFUL_RUNS = 18` stämmer inte med
+      verklig kadens (uppmätt 4–9 lyckade körningar/dygn, GitHub tappar
+      ticks) — health-checken kommer larma så fort patch-items finns, om
+      inte tröskeln justeras då.
+    - **Tunnande** (`scripts/rollupSnapshots.ts`) är ett separat, manuellt
+      körbart verktyg (dry-run som standard, `--apply` för att radera),
+      INTE kopplat till CI/cron; se #4 för varför det inte strider mot
+      "historik raderas aldrig".
 
 ## Vad som är byggt och verifierat hittills
 - **Milestone 1**: OAuth-token, connected-realm-upplösning, per-realm-
