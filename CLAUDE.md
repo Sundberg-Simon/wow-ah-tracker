@@ -445,6 +445,56 @@ eftersom.]
         flaggor; AH-listningar (fullständig lista, händelsestyrd) behövs
         redan i steg 2. AH-listningar går ut inom max 48 h och mail efter 30
         dygn, så en ögonblicksbild äldre än så räknas som okänd, inte som 0.
+    - **Steg 2 byggt (godkänt av Simon 2026-09-19): väskor + egna AH-
+      listningar**, tidsstämpel per källa, "okänt" för ogenomsökt/föråldrat.
+      Simons lager ligger i väskor, AH och ibland post — aldrig bank/Warband-
+      bank; han tömmer brevlådan vid varje inloggning tills mail-källan är
+      byggd (bank och post är separata tillägg senare).
+      * **Addon** (`Stock.lua`): per karaktär i `WowAHTrackerStockDB.
+        characters["realm|karaktär"]` = `bags`/`auctions` `{ at, ts (unix),
+        counts = { [itemId] = n } }` + `held` (någonsin hållit). Snapshoten
+        listar ALLA crafted item-id med explicit 0, så "räknat 0" skiljs från
+        "saknas = okänt". Väskor skannas på `BAG_UPDATE_DELAYED`
+        (strypt 0,5 s med en avslutande skanning så sista ändringen aldrig
+        tappas; ingen skanning om väskorna inte laddats — ingen falsk "0
+        överallt"). AH-listningar sparas på `OWNED_AUCTIONS_UPDATED` bara vid
+        FULLA resultat och bara Active (sålda har redan lämnat); Blizzards UI
+        laddar egna auktioner först när fliken **Auctions** öppnas, och vi
+        anropar INTE `QueryOwnedAuctions` själva (samma lärdom som sökrutan:
+        gå aldrig runt AH-fönstrets eget state). Crafted-listan kommer från
+        `crafted = true` i data.lua, med de två kända som fallback tills en
+        data.lua med flaggan hämtats. `/waht stock` = per konto (rapporten
+        slår ihop alla), en tyst inloggningsrad bara vid OUT/LOW.
+      * **Regeln** (identisk i `Stock.lua` och `src/earnings/stock.ts` —
+        ändra båda och kör om delade testfall): väskor är kända om en snapshot
+        listar itemet (går aldrig ut); AH-listningar bara om snapshoten är
+        ≤ 48 h; total = summan av kända delar; okänt = någon karaktär saknar
+        en del (eller klustret saknar känd karaktär). Helt känt: total >
+        tröskel → OK, 0 → OUT, annars LOW. Delvis okänt: total > tröskel → OK
+        ("minst N"), annars UNKNOWN. Tröskel default 0 (per item senare).
+        Kluster listas först när itemet hållits eller sålts där.
+        Karaktärer i klustret = rosterkaraktärer + observerade; en oskannad
+        rosterkaraktär gör klustret okänt (lagret kan ligga på den).
+      * **DB/ingest**: `stock_observations` (insert-only historik, unik på
+        konto/realm/karaktär/källa/item/observed_at → idempotent),
+        `stock_held`. Stock-parsningen är isolerad: ett trasigt stockrecord
+        hoppas över med varning och kan ALDRIG stoppa intäkts-ingesten.
+      * **Rapport**: sektionen "Crafted-item stock" (aktuellt läge, oberoende
+        av fönster/filter): status-badges OUT/LOW/UNKNOWN/OK per kluster,
+        per karaktär "bags N (ålder), AH N (ålder)" eller "never scanned"/
+        "stale". Klustret etiketteras med de realmer som faktiskt används.
+      * **`/waht realms remove <realm>, <karaktär>`** (nytt): rostern kunde
+        bara växa, så en raderad karaktär (t.ex. ExampleChar, ExampleRealm) blev kvar
+        för evigt och höll sitt kluster UNKNOWN. Nås DB:n vid logout/`/reload`
+        + nästa ingest (roster-snapshoten ersätts per konto).
+      * **Verifierat**: 24+24+16 addon-tester i Lua-interpretator (inkl. en
+        delad JSON med 17 statusfall som körs mot BÅDE Lua- och TS-regeln),
+        20 ingest/parser-tester (varav en rullad-tillbaka DB-transaktion),
+        visuell kontroll av rapportsektionen i riktig Chrome. EJ verifierat
+        i spelet (kräver att Simon spelar) — se "Obligatoriskt sista steg".
+      * **Ej pushat**: `crafted = true` i data.lua (`scripts/report.ts`) ligger
+        som lokal commit tills Simon säger till; addonet fungerar utan den via
+        fallback-listan.
 
 ## Vad som är byggt och verifierat hittills
 - **Milestone 1**: OAuth-token, connected-realm-upplösning, per-realm-

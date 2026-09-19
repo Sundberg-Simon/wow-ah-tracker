@@ -79,7 +79,7 @@ async function main() {
   for (const a of accounts) {
     const { sales, purchases, roster, missingRealmOrCharacter } = a.data;
     console.log(
-      `${a.label} (${a.folder}): ${sales.length} sales, ${purchases.length} purchases, ${roster.length} roster characters; file last saved ${a.modifiedAt?.toLocaleString() ?? "?"}`,
+      `${a.label} (${a.folder}): ${sales.length} sales, ${purchases.length} purchases, ${roster.length} roster characters, ${a.data.stockObservations.length} stock observations; file last saved ${a.modifiedAt?.toLocaleString() ?? "?"}`,
     );
     if (missingRealmOrCharacter > 0) {
       console.warn(`  WARNING: ${missingRealmOrCharacter} record(s) have no realm/character - ingested, but unclassifiable.`);
@@ -106,7 +106,8 @@ async function main() {
       totalPurchasesInserted += r.purchasesInserted;
       console.log(
         `  ${a.label}: sales ${r.salesBefore} -> ${r.salesAfter} in DB (+${r.salesInserted} new, ${a.data.sales.length} in file); ` +
-          `purchases ${r.purchasesBefore} -> ${r.purchasesAfter} (+${r.purchasesInserted} new, ${a.data.purchases.length} in file)`,
+          `purchases ${r.purchasesBefore} -> ${r.purchasesAfter} (+${r.purchasesInserted} new, ${a.data.purchases.length} in file); ` +
+          `stock observations +${r.stockInserted} new (${a.data.stockObservations.length} in file)`,
       );
     }
 

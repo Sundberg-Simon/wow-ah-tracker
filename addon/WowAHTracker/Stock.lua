@@ -1,4 +1,10 @@
--- WoW AH Tracker - crafted-item stock (step 1 of 3: the PROBE)
+-- WoW AH Tracker - crafted-item stock
+--
+-- Two halves in this file: the PROBE (step 1, `/waht stockprobe`, unchanged) and
+-- the SNAPSHOTS + `/waht stock` (step 2, at the bottom - see the "step 2" banner).
+-- The probe's findings (verified in-game 2026-09-19, CLAUDE.md #15) are what step 2
+-- is built on: bags are live; bank/Warband, mail and own auction listings are only
+-- visible while their window is open.
 --
 -- Simon wants to know how many of each crafted item (Vial of the Sands, Sky
 -- Golem) he has left per realm cluster, and to be told when a cluster runs
@@ -63,6 +69,7 @@ end
 local function EnsureDB()
 	WowAHTrackerStockDB = WowAHTrackerStockDB or {}
 	WowAHTrackerStockDB.probes = WowAHTrackerStockDB.probes or {}
+	WowAHTrackerStockDB.characters = WowAHTrackerStockDB.characters or {}
 end
 
 -- pcall wrapper that returns (ok, value...) and never throws.
@@ -416,10 +423,452 @@ function WowAHTrackerStock_Probe(arg)
 	return lines
 end
 
-local loader = CreateFrame("Frame")
-loader:RegisterEvent("ADDON_LOADED")
-loader:SetScript("OnEvent", function(_, _, addonName)
-	if addonName == "WowAHTracker" then
-		EnsureDB()
+-- =====================================================================
+-- step 2: per-character SNAPSHOTS + `/waht stock`
+-- =====================================================================
+--
+-- Goal: how many of each CRAFTED item Simon has left per realm cluster, and a
+-- flag when a cluster runs out. The earnings report is the main place (it
+-- merges all 3 accounts through the DB); this file records the raw per-
+-- character snapshots that the ingest carries there, and `/waht stock` is the
+-- quick per-character/per-account check in the game. Stock numbers are
+-- personal data like earnings: they live in SavedVariables and the local DB
+-- only - never in data.lua / anything published (CLAUDE.md #13, #15).
+--
+-- Sources counted now: BAGS (live) and own AUCTION LISTINGS (a snapshot taken
+-- when the Auctions tab has loaded them). Mail and banks are NOT counted yet -
+-- Simon empties his mailbox at each login until the mail source exists, and
+-- never keeps stock in the bank/Warband bank.
+--
+-- Data model (WowAHTrackerStockDB.characters["<realm>|<character>"]):
+--   bags     = { at = "<local time>", ts = <unix time>, counts = { [itemId] = n, ... } }
+--   auctions = { same shape; ACTIVE listings only (sold ones already left) }
+--   held     = { [itemId] = true }   -- this character has EVER been seen holding it
+-- A snapshot lists EVERY crafted item id with an explicit count (0 included),
+-- so "counted zero" is distinguishable from "not in the snapshot = unknown"
+-- (an item marked crafted after the last scan simply isn't there yet).
+--
+-- Status per (cluster, item) - the rule the report implements identically:
+--   a character's BAGS are known if a bags snapshot lists the item (they never
+--   expire: they only change when the character is played);
+--   its AUCTIONS are known only if the snapshot is fresh (<= 48h - listings
+--   last at most 48h, after which they sold or came back as mail, so an older
+--   snapshot says nothing);
+--   total = sum of the KNOWN parts; unknown = any character missing a part;
+--   fully known: total <= threshold -> OUT (0) / LOW (>0), else OK;
+--   partly unknown: total > threshold -> OK (at least that many), else UNKNOWN
+--   (it may be running out, we can't tell) - unknown is never shown as 0.
+
+local AUCTION_MAX_AGE_SECONDS = 48 * 60 * 60
+local LOW_STOCK_THRESHOLD = 0 -- flag at 0 left; per-item configuration comes later
+local MIN_BAG_SCAN_INTERVAL = 0.5
+
+-- Which items are "crafted": data.lua carries crafted = true (from
+-- config/trackedItems.json). Until a data.lua with that flag has been fetched,
+-- fall back to the two known crafted items so the feature works immediately.
+local function craftedItems()
+	local list = {}
+	if WowAhTrackerData and WowAhTrackerData.items then
+		for id, item in pairs(WowAhTrackerData.items) do
+			if item.crafted == true then
+				table.insert(list, { id = tonumber(item.id) or tonumber(id), name = item.name or ("item " .. tostring(id)) })
+			end
+		end
+	end
+	if #list == 0 then
+		for _, item in ipairs(PROBE_ITEMS) do
+			table.insert(list, { id = item.id, name = item.name })
+		end
+	end
+	table.sort(list, function(a, b)
+		return a.name < b.name
+	end)
+	return list
+end
+
+local function characterRecord(create)
+	EnsureDB()
+	local key = (GetRealmName() or "?") .. "|" .. (UnitName("player") or "?")
+	local rec = WowAHTrackerStockDB.characters[key]
+	if not rec and create then
+		rec = { realm = GetRealmName(), character = UnitName("player") }
+		WowAHTrackerStockDB.characters[key] = rec
+	end
+	return rec
+end
+
+-- Counts of each wanted item in the carried bags, or nil if the bags aren't
+-- loaded yet (recording "0 everywhere" from an early scan would be a lie).
+local function scanBagCounts(items)
+	if not (C_Container and C_Container.GetContainerNumSlots and C_Container.GetContainerItemInfo) then
+		return nil
+	end
+	local wanted, counts = {}, {}
+	for _, item in ipairs(items) do
+		wanted[item.id] = true
+		counts[item.id] = 0
+	end
+	local sawSlots = false
+	for _, bagId in ipairs(carriedBagIds()) do
+		local okN, numSlots = try(C_Container.GetContainerNumSlots, bagId)
+		if okN and type(numSlots) == "number" and numSlots > 0 then
+			sawSlots = true
+			for slot = 1, numSlots do
+				local okI, info = try(C_Container.GetContainerItemInfo, bagId, slot)
+				if okI and type(info) == "table" and info.itemID and wanted[info.itemID] then
+					counts[info.itemID] = counts[info.itemID] + (info.stackCount or 1)
+				end
+			end
+		end
+	end
+	if not sawSlots then
+		return nil
+	end
+	return counts
+end
+
+local function recordSnapshot(source, counts)
+	local rec = characterRecord(true)
+	rec[source] = { at = date("%Y-%m-%dT%H:%M:%S"), ts = time(), counts = counts }
+	rec.held = rec.held or {}
+	for id, n in pairs(counts) do
+		if n > 0 then
+			rec.held[id] = true
+		end
+	end
+end
+
+local lastBagScan = -1000
+local bagScanPending = false
+
+local function scanBagsNow()
+	lastBagScan = GetTime and GetTime() or 0
+	local counts = scanBagCounts(craftedItems())
+	if counts then
+		recordSnapshot("bags", counts)
+	end
+end
+
+-- BAG_UPDATE_DELAYED already batches slot changes, but bursts still happen
+-- (looting, vendoring). Scan at most every MIN_BAG_SCAN_INTERVAL - and if an
+-- event lands inside the window, schedule ONE trailing scan so the LAST change
+-- is never dropped.
+local function requestBagScan()
+	local now = GetTime and GetTime() or 0
+	if now - lastBagScan >= MIN_BAG_SCAN_INTERVAL then
+		scanBagsNow()
+	elseif not bagScanPending and C_Timer and C_Timer.After then
+		bagScanPending = true
+		C_Timer.After(MIN_BAG_SCAN_INTERVAL, function()
+			bagScanPending = false
+			scanBagsNow()
+		end)
+	end
+end
+
+-- Own auction listings, from the client's own owned-auction list, ONLY when it
+-- reports FULL results (Blizzard's UI loads them when the Auctions tab is
+-- opened/refreshed; we deliberately do not query them ourselves - see the
+-- search-bar lesson in CLAUDE.md about bypassing the Auction House frame's own
+-- state). Only ACTIVE listings count; sold ones already left. Zero listings
+-- with full results is a legitimate all-zero snapshot.
+local function scanAuctionsNow()
+	local ah = C_AuctionHouse
+	if not (ah and ah.GetNumOwnedAuctions and ah.GetOwnedAuctionInfo and ah.HasFullOwnedAuctionResults) then
+		return
+	end
+	local okF, full = try(ah.HasFullOwnedAuctionResults)
+	if not (okF and full == true) then
+		return
+	end
+	local activeStatus = Enum and Enum.AuctionStatus and Enum.AuctionStatus.Active
+	if activeStatus == nil then
+		return -- can't tell active from sold: don't guess
+	end
+	local okN, n = try(ah.GetNumOwnedAuctions)
+	if not okN or type(n) ~= "number" then
+		return
+	end
+	local wanted, counts = {}, {}
+	for _, item in ipairs(craftedItems()) do
+		wanted[item.id] = true
+		counts[item.id] = 0
+	end
+	for i = 1, n do
+		local ok, info = try(ah.GetOwnedAuctionInfo, i)
+		if ok and type(info) == "table" and info.itemKey and wanted[info.itemKey.itemID] and info.status == activeStatus then
+			counts[info.itemKey.itemID] = counts[info.itemKey.itemID] + (info.quantity or 1)
+		end
+	end
+	recordSnapshot("auctions", counts)
+end
+
+-- ---- status ----
+
+-- The rule from the banner above, on plain data so it can be tested in
+-- isolation and mirrored exactly by the report. `chars` is a list of
+-- { bags = n or nil, auctions = n or nil } where nil means UNKNOWN (never
+-- scanned, or an auction snapshot older than 48h - the caller decides that).
+-- Returns total, unknown, status ("OUT" | "LOW" | "OK" | "UNKNOWN").
+function WowAHTrackerStock_ClusterStatus(chars, threshold)
+	threshold = threshold or LOW_STOCK_THRESHOLD
+	local total, unknown = 0, false
+	if #chars == 0 then
+		unknown = true -- a cluster with no known character can't be judged
+	end
+	for _, c in ipairs(chars) do
+		if c.bags == nil then
+			unknown = true
+		else
+			total = total + c.bags
+		end
+		if c.auctions == nil then
+			unknown = true
+		else
+			total = total + c.auctions
+		end
+	end
+	local status
+	if not unknown then
+		if total > threshold then
+			status = "OK"
+		elseif total == 0 then
+			status = "OUT"
+		else
+			status = "LOW"
+		end
+	else
+		status = (total > threshold) and "OK" or "UNKNOWN"
+	end
+	return total, unknown, status
+end
+
+local function normalizeRealm(name)
+	return (name or ""):gsub("%s+", ""):lower()
+end
+
+-- Connected-realm cluster of a realm name, via data.lua's connectedRealms
+-- (same normalize-and-match as the realm roster). Returns id, names or nil.
+local function clusterOf(realm)
+	if WowAhTrackerData and WowAhTrackerData.connectedRealms then
+		local needle = normalizeRealm(realm)
+		for id, names in pairs(WowAhTrackerData.connectedRealms) do
+			for _, n in ipairs(names) do
+				if normalizeRealm(n) == needle then
+					return tonumber(id), names
+				end
+			end
+		end
+	end
+	return nil, nil
+end
+
+local function ageText(ts, now)
+	if not ts then
+		return "never"
+	end
+	local d = math.max(0, now - ts)
+	if d < 90 then
+		return "just now"
+	elseif d < 5400 then
+		return string.format("%dm ago", math.floor(d / 60 + 0.5))
+	elseif d < 172800 then
+		return string.format("%dh ago", math.floor(d / 3600 + 0.5))
+	end
+	return string.format("%dd ago", math.floor(d / 86400 + 0.5))
+end
+
+-- This account's picture, per crafted item and cluster. A cluster is IN SCOPE
+-- for an item once a character here has held it or a sale of it was logged
+-- there - otherwise ~80 clusters would each show "0, never stocked".
+local function buildAccountStock(now)
+	EnsureDB()
+	local items = craftedItems()
+	local roster = (WowAHTrackerRealmRosterDB and WowAHTrackerRealmRosterDB.characters) or {}
+	local sales = (WowAHTrackerSalesDB and WowAHTrackerSalesDB.sales) or {}
+	local results = {}
+
+	for _, item in ipairs(items) do
+		local clusters = {} -- clusterKey -> { label, members, chars = { [key] = {...} }, inScope }
+		local function cluster(realm)
+			local id, names = clusterOf(realm)
+			local key = id and ("cr:" .. id) or ("name:" .. normalizeRealm(realm))
+			local c = clusters[key]
+			if not c then
+				c = { key = key, members = names and #names or 1, chars = {}, inScope = false, realmSet = {} }
+				clusters[key] = c
+			end
+			-- Labelled by the realm(s) actually used, not the group's first name.
+			c.realmSet[realm] = true
+			return c
+		end
+		local function addChar(c, realm, character)
+			local k = realm .. "|" .. character
+			if not c.chars[k] then
+				c.chars[k] = { key = k, character = character }
+			end
+			return c.chars[k]
+		end
+
+		for key, rec in pairs(WowAHTrackerStockDB.characters) do
+			local c = cluster(rec.realm or "?")
+			local ch = addChar(c, rec.realm or "?", rec.character or key)
+			ch.rec = rec
+			if rec.held and rec.held[item.id] then
+				c.inScope = true
+			end
+		end
+		for _, entry in pairs(roster) do
+			if entry.realm and entry.character then
+				addChar(cluster(entry.realm), entry.realm, entry.character)
+			end
+		end
+		local nameLower = item.name:lower()
+		for _, sale in ipairs(sales) do
+			if sale.itemName and sale.itemName:lower() == nameLower and sale.realm then
+				cluster(sale.realm).inScope = true
+			end
+		end
+
+		local rows = {}
+		for _, c in pairs(clusters) do
+			if c.inScope then
+				local charInputs, details = {}, {}
+				for _, ch in pairs(c.chars) do
+					local rec = ch.rec
+					local bags = rec and rec.bags and rec.bags.counts and rec.bags.counts[item.id] or nil
+					local aucKnown = rec and rec.auctions and rec.auctions.counts and rec.auctions.counts[item.id] ~= nil
+					local auctions = nil
+					if aucKnown and rec.auctions.ts and (now - rec.auctions.ts) <= AUCTION_MAX_AGE_SECONDS then
+						auctions = rec.auctions.counts[item.id]
+					end
+					table.insert(charInputs, { bags = bags, auctions = auctions })
+					table.insert(details, {
+						character = ch.character,
+						bags = bags,
+						bagsTs = rec and rec.bags and rec.bags.ts or nil,
+						auctions = auctions,
+						auctionsTs = rec and rec.auctions and rec.auctions.ts or nil,
+						auctionsStale = aucKnown and auctions == nil,
+					})
+				end
+				table.sort(details, function(a, b)
+					return a.character < b.character
+				end)
+				local total, unknown, status = WowAHTrackerStock_ClusterStatus(charInputs, LOW_STOCK_THRESHOLD)
+				local realmNames = {}
+				for realmName in pairs(c.realmSet) do
+					table.insert(realmNames, realmName)
+				end
+				table.sort(realmNames)
+				table.insert(rows, {
+					label = table.concat(realmNames, ", "),
+					members = c.members,
+					total = total,
+					unknown = unknown,
+					status = status,
+					details = details,
+				})
+			end
+		end
+		table.sort(rows, function(a, b)
+			local order = { OUT = 1, LOW = 2, UNKNOWN = 3, OK = 4 }
+			if order[a.status] ~= order[b.status] then
+				return order[a.status] < order[b.status]
+			end
+			return a.label < b.label
+		end)
+		table.insert(results, { item = item, rows = rows })
+	end
+	return results
+end
+
+local STATUS_COLOR = { OUT = "ff5555", LOW = "ffaa33", UNKNOWN = "aaaaaa", OK = "33ff99" }
+
+local function detailText(d, now)
+	local parts = {}
+	table.insert(parts, d.bags ~= nil and string.format("bags %d (%s)", d.bags, ageText(d.bagsTs, now)) or "bags never scanned")
+	if d.auctions ~= nil then
+		table.insert(parts, string.format("AH %d (%s)", d.auctions, ageText(d.auctionsTs, now)))
+	elseif d.auctionsStale then
+		table.insert(parts, string.format("AH stale (%s)", ageText(d.auctionsTs, now)))
+	else
+		table.insert(parts, "AH never scanned")
+	end
+	return d.character .. ": " .. table.concat(parts, ", ")
+end
+
+function WowAHTrackerStock_Print()
+	local now = time()
+	local results = buildAccountStock(now)
+	if #results == 0 then
+		printMsg("No crafted items are known yet (data.lua carries none, and the fallback list is empty).")
+		return
+	end
+	printMsg("Crafted-item stock - THIS account only (the earnings report combines all accounts). Mail and banks are not counted.")
+	local any = false
+	for _, result in ipairs(results) do
+		DEFAULT_CHAT_FRAME:AddMessage(string.format("  %s", result.item.name))
+		if #result.rows == 0 then
+			DEFAULT_CHAT_FRAME:AddMessage("    nothing seen or sold here yet")
+		end
+		for _, row in ipairs(result.rows) do
+			any = true
+			local detailParts = {}
+			for _, d in ipairs(row.details) do
+				table.insert(detailParts, detailText(d, now))
+			end
+			local size = row.members > 1 and string.format(" (group of %d)", row.members) or ""
+			local shown = row.unknown and (row.total > 0 and (tostring(row.total) .. "+ known") or "unknown") or tostring(row.total)
+			DEFAULT_CHAT_FRAME:AddMessage(
+				string.format(
+					"    |cff%s[%s]|r %s%s: %s  -  %s",
+					STATUS_COLOR[row.status] or "ffffff",
+					row.status,
+					row.label,
+					size,
+					shown,
+					#detailParts > 0 and table.concat(detailParts, "; ") or "no characters here"
+				)
+			)
+		end
+	end
+	if any then
+		DEFAULT_CHAT_FRAME:AddMessage("  To refresh the AH numbers: open the Auction House and its Auctions tab. Unknown is never counted as 0.")
+	end
+end
+
+-- One quiet line at login, only if a cluster on this account is OUT or LOW.
+local function printLoginLine()
+	local now = time()
+	local flagged = 0
+	for _, result in ipairs(buildAccountStock(now)) do
+		for _, row in ipairs(result.rows) do
+			if row.status == "OUT" or row.status == "LOW" then
+				flagged = flagged + 1
+			end
+		end
+	end
+	if flagged > 0 then
+		printMsg(string.format("Stock: %d crafted-item cluster(s) out or low on this account - /waht stock", flagged))
+	end
+end
+
+local eventFrame = CreateFrame("Frame")
+eventFrame:RegisterEvent("ADDON_LOADED")
+eventFrame:RegisterEvent("PLAYER_LOGIN")
+eventFrame:RegisterEvent("BAG_UPDATE_DELAYED")
+eventFrame:RegisterEvent("OWNED_AUCTIONS_UPDATED")
+eventFrame:SetScript("OnEvent", function(_, event, addonName)
+	if event == "ADDON_LOADED" then
+		if addonName == "WowAHTracker" then
+			EnsureDB()
+		end
+	elseif event == "PLAYER_LOGIN" then
+		printLoginLine()
+	elseif event == "BAG_UPDATE_DELAYED" then
+		requestBagScan()
+	elseif event == "OWNED_AUCTIONS_UPDATED" then
+		scanAuctionsNow()
 	end
 end)

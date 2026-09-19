@@ -250,6 +250,14 @@ local COMMANDS = {
 	},
 	{ usage = "/waht realms", desc = "Open the realm roster - add this character and see EU connected-realm coverage." },
 	{
+		usage = "/waht realms remove <realm>, <character>",
+		desc = "Drop a roster entry (e.g. a deleted character) so it stops counting - e.g. /waht realms remove ExampleRealm, ExampleChar.",
+	},
+	{
+		usage = "/waht stock",
+		desc = "Crafted-item stock per realm cluster on THIS account (bags + own auction listings) with OUT/LOW/UNKNOWN flags; the earnings report combines all accounts.",
+	},
+	{
 		usage = "/waht stockprobe [item id or name]",
 		desc = "Report what the client can see of Vial of the Sands / Sky Golem stock (bags, bank, Warband bank, mail, own auctions) right now - run it with everything closed, then at the bank, mailbox and Auction House.",
 	},
@@ -303,10 +311,23 @@ SlashCmdList["WOWAHTRACKER"] = function(msg)
 			printMsg("Purchase log failed to load - check for a Lua error at login.")
 		end
 	elseif command == "realms" then
-		if WowAHTrackerRealmRoster_Toggle then
+		local sub, subRest = (rest or ""):match("^(%S*)%s*(.-)$")
+		if sub and sub:lower() == "remove" then
+			if WowAHTrackerRealmRoster_Remove then
+				WowAHTrackerRealmRoster_Remove(subRest)
+			else
+				printMsg("Realm roster failed to load - check for a Lua error at login.")
+			end
+		elseif WowAHTrackerRealmRoster_Toggle then
 			WowAHTrackerRealmRoster_Toggle()
 		else
 			printMsg("Realm roster failed to load - check for a Lua error at login.")
+		end
+	elseif command == "stock" then
+		if WowAHTrackerStock_Print then
+			WowAHTrackerStock_Print()
+		else
+			printMsg("Stock module failed to load - check for a Lua error at login.")
 		end
 	elseif command == "stockprobe" then
 		if WowAHTrackerStock_Probe then

@@ -225,3 +225,45 @@ CREATE TABLE IF NOT EXISTS price_snapshots_rollup (
 -- connected_realm_id is NULL for commodities.
 CREATE UNIQUE INDEX IF NOT EXISTS price_snapshots_rollup_uidx
   ON price_snapshots_rollup (item_id, COALESCE(connected_realm_id, 0), bucket_start, bucket_days);
+
+-- Crafted-item stock snapshots from the addon (Stock.lua, CLAUDE.md #15), for
+-- the local earnings report's stock section. Personal data, like earnings:
+-- never published. Insert-only: each row is one character's count of one item
+-- from one source as of observed_at (a unix timestamp the addon recorded, so
+-- no timezone guesswork). The addon keeps only the LATEST snapshot per
+-- character/source, so every distinct snapshot an ingest sees is kept here,
+-- which is what gives the report its history (ever-held, trends). Idempotent
+-- via the unique key - re-ingesting an unchanged file inserts nothing.
+--
+-- source is 'bags' or 'auctions' today; deliberately NOT a CHECK constraint so
+-- adding mail/bank later needs no migration. A snapshot lists EVERY crafted
+-- item id with an explicit count (0 included), so "counted zero" is
+-- distinguishable from "not in the snapshot = unknown".
+CREATE TABLE IF NOT EXISTS stock_observations (
+  id BIGSERIAL PRIMARY KEY,
+  account TEXT NOT NULL,
+  realm_name TEXT NOT NULL,
+  character_name TEXT NOT NULL,
+  source TEXT NOT NULL,
+  item_id INTEGER NOT NULL,
+  quantity INTEGER NOT NULL,
+  observed_at TIMESTAMPTZ NOT NULL,
+  ingested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (account, realm_name, character_name, source, item_id, observed_at)
+);
+
+CREATE INDEX IF NOT EXISTS stock_observations_item_idx
+  ON stock_observations (item_id, realm_name, observed_at DESC);
+
+-- "This character has EVER been seen holding this item" - the addon's own flag,
+-- carried across so the report's in-scope rule (a cluster is in scope once an
+-- item was held or sold there) matches the in-game one even if the snapshot that
+-- showed the stock was overwritten before an ingest saw it.
+CREATE TABLE IF NOT EXISTS stock_held (
+  account TEXT NOT NULL,
+  realm_name TEXT NOT NULL,
+  character_name TEXT NOT NULL,
+  item_id INTEGER NOT NULL,
+  first_ingested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (account, realm_name, character_name, item_id)
+);

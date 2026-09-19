@@ -126,12 +126,34 @@ export interface RosterRow {
   addedAt: string | null;
 }
 
+export interface StockObservationRow {
+  realmName: string;
+  characterName: string;
+  /** 'bags' | 'auctions' today; more sources later. */
+  source: string;
+  itemId: number;
+  quantity: number;
+  /** ISO instant, from the addon's unix timestamp. */
+  observedAt: string;
+}
+
+export interface StockHeldRow {
+  realmName: string;
+  characterName: string;
+  itemId: number;
+}
+
 export interface ExtractedAccountData {
   sales: SaleRow[];
   purchases: PurchaseRow[];
   roster: RosterRow[];
   /** Records with no realm/character: still ingested (as empty strings) but can't be classified. */
   missingRealmOrCharacter: number;
+  /** Crafted-item stock snapshots (WowAHTrackerStockDB) - see extractStock. */
+  stockObservations: StockObservationRow[];
+  stockHeld: StockHeldRow[];
+  /** Problems found while reading the stock table (skipped, never fatal - see extractStock). */
+  stockWarnings: string[];
 }
 
 const LOCAL_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/;
@@ -204,6 +226,86 @@ function assignOrdinals<T>(rows: T[], identity: (row: T) => string): number[] {
 }
 
 const SEP = "\u001e";
+
+const STOCK_SOURCES = ["bags", "auctions"] as const;
+
+/**
+ * Reads WowAHTrackerStockDB.characters. ISOLATED from the sales/purchase
+ * extraction on purpose: this is a newer, secondary feature, and a malformed
+ * stock record must never be able to stop the earnings ingest (which runs
+ * unattended every morning). Anything unreadable is skipped and reported in
+ * `warnings` instead of throwing.
+ */
+function extractStock(globals: Record<string, LuaValue>): {
+  observations: StockObservationRow[];
+  held: StockHeldRow[];
+  warnings: string[];
+} {
+  const observations: StockObservationRow[] = [];
+  const held: StockHeldRow[] = [];
+  const warnings: string[] = [];
+  try {
+    const db = globals.WowAHTrackerStockDB;
+    const characters = db && typeof db === "object" && !Array.isArray(db) ? (db as Record<string, LuaValue>).characters : undefined;
+    if (characters === undefined || characters === null) {
+      return { observations, held, warnings };
+    }
+    if (typeof characters !== "object" || Array.isArray(characters)) {
+      warnings.push("WowAHTrackerStockDB.characters is not a table - stock skipped");
+      return { observations, held, warnings };
+    }
+    for (const [key, raw] of Object.entries(characters as Record<string, LuaValue>)) {
+      if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+        warnings.push(`stock record ${key}: not a table - skipped`);
+        continue;
+      }
+      const rec = raw as Record<string, LuaValue>;
+      const realmName = typeof rec.realm === "string" ? rec.realm : "";
+      const characterName = typeof rec.character === "string" ? rec.character : "";
+      if (!realmName || !characterName) {
+        warnings.push(`stock record ${key}: no realm/character - skipped`);
+        continue;
+      }
+      for (const source of STOCK_SOURCES) {
+        const snap = rec[source];
+        if (snap === undefined || snap === null) continue;
+        if (typeof snap !== "object" || Array.isArray(snap)) {
+          warnings.push(`stock ${key}/${source}: not a table - skipped`);
+          continue;
+        }
+        const s = snap as Record<string, LuaValue>;
+        const ts = s.ts;
+        const counts = s.counts;
+        if (typeof ts !== "number" || !Number.isFinite(ts) || ts <= 0 || counts === null || typeof counts !== "object" || Array.isArray(counts)) {
+          warnings.push(`stock ${key}/${source}: missing/bad timestamp or counts - skipped`);
+          continue;
+        }
+        const observedAt = new Date(ts * 1000).toISOString();
+        for (const [itemKey, qty] of Object.entries(counts as Record<string, LuaValue>)) {
+          const itemId = Number(itemKey);
+          if (!Number.isInteger(itemId) || itemId <= 0 || typeof qty !== "number" || !Number.isFinite(qty) || qty < 0) {
+            warnings.push(`stock ${key}/${source}: bad entry ${itemKey}=${JSON.stringify(qty)} - skipped`);
+            continue;
+          }
+          observations.push({ realmName, characterName, source, itemId, quantity: Math.round(qty), observedAt });
+        }
+      }
+      const heldTable = rec.held;
+      if (heldTable && typeof heldTable === "object" && !Array.isArray(heldTable)) {
+        for (const [itemKey, flag] of Object.entries(heldTable as Record<string, LuaValue>)) {
+          const itemId = Number(itemKey);
+          if (flag === true && Number.isInteger(itemId) && itemId > 0) {
+            held.push({ realmName, characterName, itemId });
+          }
+        }
+      }
+    }
+  } catch (err) {
+    warnings.push(`stock section unreadable, skipped: ${String(err)}`);
+    return { observations: [], held: [], warnings };
+  }
+  return { observations, held, warnings };
+}
 
 export function extractAccountData(globals: Record<string, LuaValue>): ExtractedAccountData {
   let missingRealmOrCharacter = 0;
@@ -291,5 +393,14 @@ export function extractAccountData(globals: Record<string, LuaValue>): Extracted
     };
   });
 
-  return { sales, purchases, roster, missingRealmOrCharacter };
+  const stock = extractStock(globals);
+  return {
+    sales,
+    purchases,
+    roster,
+    missingRealmOrCharacter,
+    stockObservations: stock.observations,
+    stockHeld: stock.held,
+    stockWarnings: stock.warnings,
+  };
 }
