@@ -19,10 +19,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { pool } from "../src/db/pool.js";
 import { EARNINGS_ACCOUNTS, accountLabel } from "../config/earningsAccounts.js";
+import { trackedItems } from "../config/trackedItems.js";
 import {
   computeEarnings,
   SPLITS,
   type EarningsReport,
+  type ItemRow,
   type PopulationObservation,
   type RealmRow,
   type Split,
@@ -39,6 +41,7 @@ const SPLIT_LABELS: Record<Split, string> = {
 };
 const DEFAULT_SPLIT: Split = "cross";
 const DEFAULT_WINDOW = "all";
+const DEFAULT_SORT = "sales";
 const STALE_HOURS = 36;
 
 // ---- data ----
@@ -54,7 +57,7 @@ interface Freshness {
 
 async function loadInputs(now: Date) {
   const [sales, purchases, roster, realms, history, ingest, captures] = await Promise.all([
-    pool.query("SELECT account, realm_name, character_name, captured_at, net_copper FROM earnings_sales"),
+    pool.query("SELECT account, realm_name, character_name, captured_at, net_copper, item_name, item_id, quantity FROM earnings_sales"),
     pool.query("SELECT account, realm_name, character_name, captured_at, total_paid_copper FROM earnings_purchases"),
     pool.query("SELECT realm_name, character_name FROM roster_characters"),
     pool.query("SELECT connected_realm_id, realm_names FROM connected_realms"),
@@ -99,6 +102,9 @@ async function loadInputs(now: Date) {
         characterName: r.character_name,
         capturedAt: r.captured_at as Date,
         netCopper: Number(r.net_copper),
+        itemName: r.item_name as string,
+        itemId: (r.item_id as number | null) ?? null,
+        quantity: Number(r.quantity),
       })),
       purchases: purchases.rows.map((r) => ({
         account: r.account,
@@ -111,6 +117,8 @@ async function loadInputs(now: Date) {
       connectedRealms: realms.rows.map((r) => ({ id: r.connected_realm_id as number, names: r.realm_names as string[] })),
       populationHistory,
       accounts: EARNINGS_ACCOUNTS.map((a) => a.folder) as string[],
+      // ALL tracked items, inactive included, so a retired item's past sales still classify.
+      trackedItems: trackedItems.map((i) => ({ id: i.id, name: i.name, category: i.category })),
       now,
     },
     freshness,
@@ -162,7 +170,54 @@ function bestRealmLine(label: string, rows: RealmRow[]): string {
     : `<li><strong>${escapeHtml(label)}:</strong> <span class="muted">no sales in this window</span></li>`;
 }
 
-function splitSectionHtml(windowKey: string, windowLabel: string, rangeText: string, split: Split, r: SplitResult): string {
+function bestRealmCell(b: NonNullable<ItemRow["bestRealm"]>): string {
+  const title = b.members.length > 0 ? ` title="${escapeHtml(b.members.join(", "))}"` : "";
+  const groupNote = b.members.length > 1 ? ` <span class="muted">(group of ${b.members.length})</span>` : "";
+  return `<span${title}>${escapeHtml(b.label)}</span>${groupNote} <span class="muted">&mdash; ${gold(b.netCopper)}</span>`;
+}
+
+// One list of sold items. Rows carry their numbers as data-* attributes so the
+// page can re-sort them client-side (sales <-> net gold) without regenerating;
+// the server-side order is the default (sales, then net, then name).
+function itemTable(rows: ItemRow[], emptyMessage: string): string {
+  if (rows.length === 0) return `<p class="empty">${escapeHtml(emptyMessage)}</p>`;
+  const body = rows
+    .map(
+      (r, i) =>
+        `<tr data-sales="${r.salesCount}" data-net="${r.netCopper}" data-name="${escapeHtml(r.name.toLowerCase())}">` +
+        `<td class="num rank">${i + 1}</td><td>${escapeHtml(r.name)}</td>` +
+        `<td class="num">${r.salesCount}</td><td class="num">${r.units}</td><td class="num">${gold(r.netCopper)}</td>` +
+        `<td>${r.bestRealm ? bestRealmCell(r.bestRealm) : ""}</td></tr>`,
+    )
+    .join("");
+  return `<table class="items"><thead><tr><th class="num">#</th><th>Item</th><th class="num">Sales</th><th class="num">Units</th><th class="num">Net earned</th><th>Best realm</th></tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function itemsSectionHtml(r: SplitResult, hasPatchItems: boolean): string {
+  const untracked =
+    r.items.untracked.length > 0
+      ? `<h4>Not on the tracked list</h4><p class="muted">Sold, but not (or not yet) a tracked item &mdash; crafting materials and the like. Listed so every sale is accounted for.</p>${itemTable(r.items.untracked, "")}`
+      : "";
+  return `
+  <h3>Most sold items <span class="muted">(sorted by the &ldquo;Sort items&rdquo; control above)</span></h3>
+  <h4>Patch-specific items</h4>
+  ${itemTable(
+    r.items.patch,
+    hasPatchItems ? "No sales of patch-specific items in this view." : "No patch-specific items are tracked yet, so there is nothing to list here.",
+  )}
+  <h4>Permanent items</h4>
+  ${itemTable(r.items.permanent, "No sales of permanent items in this view.")}
+  ${untracked}`;
+}
+
+function splitSectionHtml(
+  windowKey: string,
+  windowLabel: string,
+  rangeText: string,
+  split: Split,
+  r: SplitResult,
+  hasPatchItems: boolean,
+): string {
   const active = split === DEFAULT_SPLIT && windowKey === DEFAULT_WINDOW ? " active" : "";
   const o = r.overall;
   const empty = o.salesCount === 0 && o.purchaseCount === 0;
@@ -199,6 +254,7 @@ function splitSectionHtml(windowKey: string, windowLabel: string, rangeText: str
   <h3>By account</h3>
   <table><thead><tr><th>Account</th>${TOTALS_HEAD}</tr></thead><tbody>${accountRows}
     <tr class="total"><td>All accounts</td>${totalsCells(o)}</tr></tbody></table>
+  ${itemsSectionHtml(r, hasPatchItems)}
   <h3>Realms ranked &mdash; overall</h3>
   ${realmTable(r.realmsOverall, 10)}
   <h3>Realms ranked &mdash; per account</h3>
@@ -208,13 +264,14 @@ function splitSectionHtml(windowKey: string, windowLabel: string, rangeText: str
 
 function buildHtml(report: EarningsReport, freshness: Freshness[]): string {
   const now = report.generatedAt;
+  const hasPatchItems = trackedItems.some((i) => i.active && i.category === "patch-specific");
 
   const sections = report.windows
     .flatMap((w) => {
       const rangeText = w.start
         ? `${localDateTime(w.start)} → ${localDateTime(w.end)} (rolling)`
         : `From the first captured record → ${localDateTime(w.end)}`;
-      return SPLITS.map((split) => splitSectionHtml(w.key, w.label, rangeText, split, w.splits[split]));
+      return SPLITS.map((split) => splitSectionHtml(w.key, w.label, rangeText, split, w.splits[split], hasPatchItems));
     })
     .join("\n");
 
@@ -223,6 +280,13 @@ function buildHtml(report: EarningsReport, freshness: Freshness[]): string {
   ).join("");
   const windowButtons = report.windows
     .map((w) => `<button type="button" data-set-window="${w.key}"${w.key === DEFAULT_WINDOW ? ' class="on"' : ""}>${escapeHtml(w.label)}</button>`)
+    .join("");
+
+  const sortButtons = [
+    ["sales", "Number of sales"],
+    ["net", "Net gold"],
+  ]
+    .map(([key, label]) => `<button type="button" data-set-sort="${key}"${key === DEFAULT_SORT ? ' class="on"' : ""}>${label}</button>`)
     .join("");
 
   const freshRows = freshness
@@ -290,6 +354,7 @@ function buildHtml(report: EarningsReport, freshness: Freshness[]): string {
   <div class="controls">
     <div class="row"><span>Characters</span>${splitButtons}</div>
     <div class="row"><span>Window</span>${windowButtons}</div>
+    <div class="row"><span>Sort items</span>${sortButtons}</div>
   </div>
 
   ${sections}
@@ -303,12 +368,34 @@ function buildHtml(report: EarningsReport, freshness: Freshness[]): string {
 
   <script>
     (function () {
-      var state = { split: ${JSON.stringify(DEFAULT_SPLIT)}, window: ${JSON.stringify(DEFAULT_WINDOW)} };
+      var state = { split: ${JSON.stringify(DEFAULT_SPLIT)}, window: ${JSON.stringify(DEFAULT_WINDOW)}, sort: ${JSON.stringify(DEFAULT_SORT)} };
       var splits = ${JSON.stringify(SPLITS)};
       var windows = ${JSON.stringify(report.windows.map((w) => w.key))};
-      var m = /^#(\\w+)-(\\w+)$/.exec(location.hash);
-      if (m && splits.indexOf(m[1]) >= 0 && windows.indexOf(m[2]) >= 0) { state.split = m[1]; state.window = m[2]; }
+      var sorts = ['sales', 'net'];
+      // #split-window or #split-window-sort; anything unrecognised falls back to the defaults.
+      var m = /^#(\\w+)-(\\w+)(?:-(\\w+))?$/.exec(location.hash);
+      if (m && splits.indexOf(m[1]) >= 0 && windows.indexOf(m[2]) >= 0) {
+        state.split = m[1]; state.window = m[2];
+        if (m[3] && sorts.indexOf(m[3]) >= 0) { state.sort = m[3]; }
+      }
+      // Re-sorts every item table (all views; they're small) by sales or net gold, ties broken by the
+      // other measure and then name, and renumbers the # column to match.
+      function sortItems() {
+        document.querySelectorAll('table.items tbody').forEach(function (tb) {
+          var rows = Array.prototype.slice.call(tb.rows);
+          rows.sort(function (a, b) {
+            var as = Number(a.dataset.sales), bs = Number(b.dataset.sales);
+            var an = Number(a.dataset.net), bn = Number(b.dataset.net);
+            var d = state.sort === 'net' ? (bn - an || bs - as) : (bs - as || bn - an);
+            if (d) { return d; }
+            return a.dataset.name < b.dataset.name ? -1 : (a.dataset.name > b.dataset.name ? 1 : 0);
+          });
+          rows.forEach(function (r, i) { tb.appendChild(r); r.querySelector('.rank').textContent = String(i + 1); });
+        });
+      }
       function render() {
+        sortItems();
+        document.querySelectorAll('[data-set-sort]').forEach(function (b) { b.classList.toggle('on', b.dataset.setSort === state.sort); });
         document.querySelectorAll('.view').forEach(function (el) {
           el.classList.toggle('active', el.dataset.split === state.split && el.dataset.window === state.window);
         });
@@ -316,10 +403,11 @@ function buildHtml(report: EarningsReport, freshness: Freshness[]): string {
         document.querySelectorAll('[data-set-window]').forEach(function (b) { b.classList.toggle('on', b.dataset.setWindow === state.window); });
         // Remembering the view across a reload is a nicety only: browsers may
         // refuse replaceState on file:// pages, which must not break toggling.
-        try { history.replaceState(null, '', '#' + state.split + '-' + state.window); } catch (e) {}
+        try { history.replaceState(null, '', '#' + state.split + '-' + state.window + (state.sort === 'sales' ? '' : '-' + state.sort)); } catch (e) {}
       }
       document.querySelectorAll('[data-set-split]').forEach(function (b) { b.addEventListener('click', function () { state.split = b.dataset.setSplit; render(); }); });
       document.querySelectorAll('[data-set-window]').forEach(function (b) { b.addEventListener('click', function () { state.window = b.dataset.setWindow; render(); }); });
+      document.querySelectorAll('[data-set-sort]').forEach(function (b) { b.addEventListener('click', function () { state.sort = b.dataset.setSort; render(); }); });
       render();
     })();
   </script>

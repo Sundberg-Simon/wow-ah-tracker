@@ -51,6 +51,18 @@ export interface SaleRec {
   characterName: string;
   capturedAt: Date;
   netCopper: number;
+  itemName: string;
+  /** Usually null in practice: the addon can only resolve ids against the tracked list at capture time. */
+  itemId: number | null;
+  /** Units in the sale (a stack sells as one sale record with quantity > 1). */
+  quantity: number;
+}
+
+/** One entry of config/trackedItems.json - ALL of them, inactive included, so retired items still classify. */
+export interface TrackedItemRec {
+  id: number;
+  name: string;
+  category: "permanent" | "patch-specific";
 }
 
 export interface PurchaseRec {
@@ -81,6 +93,8 @@ export interface EarningsInputs {
   populationHistory: Map<number, PopulationObservation[]>;
   /** Account folder ids in display order. */
   accounts: string[];
+  /** The tracked-item list, used to tell patch-specific from permanent items in the item lists. */
+  trackedItems: TrackedItemRec[];
   now: Date;
 }
 
@@ -99,6 +113,19 @@ export interface RealmRow {
   totals: Totals;
 }
 
+export type ItemGroup = "patch" | "permanent" | "untracked";
+
+export interface ItemRow {
+  key: string;
+  name: string;
+  group: ItemGroup;
+  salesCount: number;
+  units: number;
+  netCopper: number;
+  /** Where this item earned the most net gold (per connected-realm group), or null if it has no sales. */
+  bestRealm: { label: string; members: string[]; netCopper: number; salesCount: number } | null;
+}
+
 export interface SplitResult {
   overall: Totals;
   byTier: { tier: string; totals: Totals }[];
@@ -106,6 +133,13 @@ export interface SplitResult {
   /** Ranked by net gold earned, descending. */
   realmsOverall: RealmRow[];
   realmsByAccount: { account: string; rows: RealmRow[] }[];
+  /**
+   * Sold items, by list. Default order: number of sales, then net gold, then
+   * name (the report can re-sort by net gold client-side). "untracked" = sold
+   * but not on the tracked list - real data has plenty of these (crafting
+   * mats etc.), so they get their own list rather than vanishing from the view.
+   */
+  items: Record<ItemGroup, ItemRow[]>;
 }
 
 export interface WindowResult {
@@ -134,6 +168,7 @@ function addTotals(into: Totals, from: Totals) {
 }
 
 const normalizeRealm = (name: string) => name.replace(/\s+/g, "").toLowerCase();
+const normalizeItemName = (name: string) => name.trim().replace(/\s+/g, " ").toLowerCase();
 
 export function windowStart(now: Date, w: WindowDef): Date | null {
   if (!w.days && !w.months) {
@@ -179,6 +214,8 @@ interface PreparedRecord {
   groupKey: string;
   groupRealmName: string;
   members: string[];
+  /** Sales only: which item, which list, how many units. */
+  item?: { key: string; label: string; group: ItemGroup; units: number };
 }
 
 function prepare(inputs: EarningsInputs): PreparedRecord[] {
@@ -188,6 +225,24 @@ function prepare(inputs: EarningsInputs): PreparedRecord[] {
       byName.set(normalizeRealm(n), cr);
     }
   }
+
+  const trackedById = new Map<number, TrackedItemRec>();
+  const trackedByName = new Map<string, TrackedItemRec>();
+  for (const t of inputs.trackedItems) {
+    trackedById.set(t.id, t);
+    trackedByName.set(normalizeItemName(t.name), t);
+  }
+  // Classified HERE, at report time, never stored on the sale: the DB's item_id
+  // is null for every sale so far (the addon only knows ids from the tracked
+  // list as it stood at capture), so the name is what identifies the item, and
+  // the tracked list may have grown since. Same dynamic-classification rule as
+  // cross-realm vs other.
+  const itemFor = (s: SaleRec): PreparedRecord["item"] => {
+    const tracked = (s.itemId !== null ? trackedById.get(s.itemId) : undefined) ?? trackedByName.get(normalizeItemName(s.itemName));
+    return tracked
+      ? { key: `t:${tracked.id}`, label: tracked.name, group: tracked.category === "patch-specific" ? "patch" : "permanent", units: s.quantity }
+      : { key: `n:${normalizeItemName(s.itemName)}`, label: s.itemName, group: "untracked", units: s.quantity };
+  };
 
   const make = (
     kind: "sale" | "purchase",
@@ -215,7 +270,7 @@ function prepare(inputs: EarningsInputs): PreparedRecord[] {
   };
 
   return [
-    ...inputs.sales.map((s) => make("sale", s, s.netCopper)),
+    ...inputs.sales.map((s) => ({ ...make("sale", s, s.netCopper), item: itemFor(s) })),
     ...inputs.purchases.map((p) => make("purchase", p, p.totalPaidCopper)),
   ];
 }
@@ -265,7 +320,34 @@ function computeSplit(records: PreparedRecord[], split: Split, accounts: string[
     return row;
   };
 
+  interface ItemAcc {
+    row: ItemRow;
+    realms: Map<string, { label: string; members: string[]; netCopper: number; salesCount: number }>;
+  }
+  const itemMap = new Map<string, ItemAcc>();
+
   for (const rec of included) {
+    if (rec.kind === "sale" && rec.item) {
+      let acc = itemMap.get(rec.item.key);
+      if (!acc) {
+        acc = {
+          row: { key: rec.item.key, name: rec.item.label, group: rec.item.group, salesCount: 0, units: 0, netCopper: 0, bestRealm: null },
+          realms: new Map(),
+        };
+        itemMap.set(rec.item.key, acc);
+      }
+      acc.row.salesCount += 1;
+      acc.row.units += rec.item.units;
+      acc.row.netCopper += rec.amountCopper;
+      const r = acc.realms.get(rec.groupKey) ?? { label: rec.groupRealmName, members: rec.members, netCopper: 0, salesCount: 0 };
+      if (!acc.realms.has(rec.groupKey)) {
+        acc.realms.set(rec.groupKey, r);
+      } else if (!r.label.split(", ").includes(rec.groupRealmName)) {
+        r.label += `, ${rec.groupRealmName}`;
+      }
+      r.netCopper += rec.amountCopper;
+      r.salesCount += 1;
+    }
     tally(overall, rec);
     if (!tierMap.has(rec.tier)) {
       tierMap.set(rec.tier, emptyTotals());
@@ -291,12 +373,25 @@ function computeSplit(records: PreparedRecord[], split: Split, accounts: string[
   const rank = (map: Map<string, RealmRow>) =>
     [...map.values()].sort((a, b) => b.totals.netCopper - a.totals.netCopper || a.label.localeCompare(b.label));
 
+  const items: Record<ItemGroup, ItemRow[]> = { patch: [], permanent: [], untracked: [] };
+  for (const acc of itemMap.values()) {
+    const best = [...acc.realms.values()].sort(
+      (a, b) => b.netCopper - a.netCopper || b.salesCount - a.salesCount || a.label.localeCompare(b.label),
+    )[0];
+    acc.row.bestRealm = best ?? null;
+    items[acc.row.group].push(acc.row);
+  }
+  for (const list of Object.values(items)) {
+    list.sort((a, b) => b.salesCount - a.salesCount || b.netCopper - a.netCopper || a.name.localeCompare(b.name));
+  }
+
   const result: SplitResult = {
     overall,
     byTier,
     byAccount: [...accountMap.entries()].map(([account, totals]) => ({ account, totals })),
     realmsOverall: rank(realmMap),
     realmsByAccount: [...realmByAccount.entries()].map(([account, m]) => ({ account, rows: rank(m) })),
+    items,
   };
 
   // Self-check: every breakdown must add back up to the overall total. A
@@ -308,6 +403,12 @@ function computeSplit(records: PreparedRecord[], split: Split, accounts: string[
   for (const ar of result.realmsByAccount) {
     const acct = result.byAccount.find((a) => a.account === ar.account)!;
     if (!sameTotals(sumOf(ar.rows), acct.totals)) problems.push(`realms != account total for ${ar.account}`);
+  }
+  const allItemRows = [...items.patch, ...items.permanent, ...items.untracked];
+  const itemSales = allItemRows.reduce((n, r) => n + r.salesCount, 0);
+  const itemNet = allItemRows.reduce((n, r) => n + r.netCopper, 0);
+  if (itemSales !== overall.salesCount || itemNet !== overall.netCopper) {
+    problems.push(`item lists (${itemSales} sales / ${itemNet}c) != overall sales (${overall.salesCount} / ${overall.netCopper}c)`);
   }
   if (problems.length > 0) {
     throw new Error(`Earnings aggregation inconsistent (${split}): ${problems.join("; ")}`);
