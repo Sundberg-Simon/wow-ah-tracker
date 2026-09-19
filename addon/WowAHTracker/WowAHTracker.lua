@@ -214,12 +214,12 @@ local COMMANDS = {
 		desc = "Look up a tracked item and drive the Auction House search bar to it (AH window must be open).",
 	},
 	{ usage = "/waht categorize", desc = "Open the bag categorizer to build the tracked-item list from your bags." },
-	{ usage = "/waht sales", desc = "Show recently captured AH sales (count + last 10)." },
+	{ usage = "/waht sales", desc = "Show captured AH sales, split into cross-realm (roster) vs other totals, plus the last 10." },
 	{
 		usage = "/waht salesdebug",
 		desc = "Show the last 25 mailbox scan traces, for diagnosing the sales log if something looks off.",
 	},
-	{ usage = "/waht purchases", desc = "Show recently captured AH purchases (count + last 10)." },
+	{ usage = "/waht purchases", desc = "Show captured AH purchases, split into cross-realm (roster) vs other totals, plus the last 10." },
 	{
 		usage = "/waht purchasedebug",
 		desc = "Show the last 25 mailbox scan traces, for diagnosing the purchase log if something looks off.",

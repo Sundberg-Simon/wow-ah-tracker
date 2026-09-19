@@ -291,12 +291,17 @@ local function printPurchases()
 	EnsureDB()
 	local purchases = WowAHTrackerPurchaseDB.purchases
 	printMsg(string.format("Captured purchases: %d", #purchases))
+	-- Split against the roster as it stands right now - see the note on
+	-- WowAHTrackerRealmRoster_Classify (RealmRoster.lua) for why this is never
+	-- cached on the purchase record.
+	WowAHTrackerRealmRoster_PrintTally(purchases, "totalPricePaid", "purchases", "paid", copperToGoldString)
 	local from = math.max(1, #purchases - 9)
 	for i = #purchases, from, -1 do
 		local purchase = purchases[i]
 		DEFAULT_CHAT_FRAME:AddMessage(
 			string.format(
-				"  %s | %s x%d | %s | paid %s | %s",
+				"  %s %s | %s x%d | %s | paid %s | %s",
+				WowAHTrackerRealmRoster_Tag(purchase),
 				purchase.capturedAt or "?",
 				purchase.itemName or "?",
 				purchase.count or 1,
