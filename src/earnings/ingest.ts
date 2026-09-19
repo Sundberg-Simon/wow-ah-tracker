@@ -16,6 +16,7 @@ export interface AccountResult {
   purchasesBefore: number;
   purchasesAfter: number;
   purchasesInserted: number;
+  stockInserted: number;
   warnings: string[];
 }
 
@@ -147,6 +148,73 @@ export async function ingestAccount(client: pg.PoolClient, a: AccountInput): Pro
     );
   }
 
+  // Crafted-item stock (insert-only, idempotent). Warnings from the isolated
+  // parse are surfaced but never fatal.
+  for (const w of a.data.stockWarnings) {
+    warnings.push(w);
+  }
+  let stockInserted = 0;
+  if (a.data.stockObservations.length > 0) {
+    const r = await client.query(
+      `INSERT INTO stock_observations (account, realm_name, character_name, source, item_id, quantity, observed_at)
+       SELECT $1, x.realm_name, x.character_name, x.source, x.item_id, x.quantity, x.observed_at
+       FROM jsonb_to_recordset($2::jsonb) AS x(
+         realm_name text, character_name text, source text, item_id int, quantity int, observed_at timestamptz)
+       ON CONFLICT DO NOTHING`,
+      [
+        a.folder,
+        JSON.stringify(
+          a.data.stockObservations.map((o) => ({
+            realm_name: o.realmName,
+            character_name: o.characterName,
+            source: o.source,
+            item_id: o.itemId,
+            quantity: o.quantity,
+            observed_at: o.observedAt,
+          })),
+        ),
+      ],
+    );
+    stockInserted = r.rowCount ?? 0;
+    // Integrity, as for sales: every observation in the file must be in the DB now.
+    const check = await client.query(
+      `SELECT count(*)::int AS n FROM jsonb_to_recordset($2::jsonb) AS x(
+           realm_name text, character_name text, source text, item_id int, observed_at timestamptz)
+         JOIN stock_observations s
+           ON s.account = $1 AND s.realm_name = x.realm_name AND s.character_name = x.character_name
+          AND s.source = x.source AND s.item_id = x.item_id AND s.observed_at = x.observed_at`,
+      [
+        a.folder,
+        JSON.stringify(
+          a.data.stockObservations.map((o) => ({
+            realm_name: o.realmName,
+            character_name: o.characterName,
+            source: o.source,
+            item_id: o.itemId,
+            observed_at: o.observedAt,
+          })),
+        ),
+      ],
+    );
+    if (check.rows[0].n !== a.data.stockObservations.length) {
+      throw new Error(
+        `${a.label}: stock integrity check failed - ${check.rows[0].n} of ${a.data.stockObservations.length} observations are in the DB.`,
+      );
+    }
+  }
+  if (a.data.stockHeld.length > 0) {
+    await client.query(
+      `INSERT INTO stock_held (account, realm_name, character_name, item_id)
+       SELECT $1, x.realm_name, x.character_name, x.item_id
+       FROM jsonb_to_recordset($2::jsonb) AS x(realm_name text, character_name text, item_id int)
+       ON CONFLICT DO NOTHING`,
+      [
+        a.folder,
+        JSON.stringify(a.data.stockHeld.map((h) => ({ realm_name: h.realmName, character_name: h.characterName, item_id: h.itemId }))),
+      ],
+    );
+  }
+
   const si = salesInserted.rowCount ?? 0;
   const pi = purchasesInserted.rowCount ?? 0;
 
@@ -157,5 +225,5 @@ export async function ingestAccount(client: pg.PoolClient, a: AccountInput): Pro
     [a.folder, a.modifiedAt, sales.length, purchases.length, si, pi],
   );
 
-  return { salesBefore, salesAfter, salesInserted: si, purchasesBefore, purchasesAfter, purchasesInserted: pi, warnings };
+  return { salesBefore, salesAfter, salesInserted: si, purchasesBefore, purchasesAfter, purchasesInserted: pi, stockInserted, warnings };
 }

@@ -434,6 +434,58 @@ function WowAHTrackerRealmRoster_Toggle()
 	end
 end
 
+-- `/waht realms remove <realm>, <character>` - drops a roster entry. The roster
+-- can only grow otherwise, so a DELETED character stays listed forever; for the
+-- crafted-item stock feature that matters, because a roster character in a cluster
+-- that can never be scanned again keeps the cluster "unknown" permanently (the
+-- stock could be on them). Realm and character are matched case- and
+-- space-insensitively ("area52" finds "Area 52"), separated by a comma because
+-- realm names contain spaces and apostrophes but never commas. The change reaches
+-- the DB the same way as everything else: on logout or /reload, then the next
+-- ingest replaces that account's roster snapshot. Past sales/purchases logged by
+-- the removed character are untouched (they classify by the roster as it is now,
+-- so if it never sold anything nothing changes).
+function WowAHTrackerRealmRoster_Remove(arg)
+	EnsureDB()
+	local realm, character = (arg or ""):match("^%s*(.-)%s*,%s*(.-)%s*$")
+	if not realm or realm == "" or not character or character == "" then
+		printMsg("Usage: /waht realms remove <realm>, <character>   e.g. /waht realms remove ExampleRealm, ExampleChar")
+		return
+	end
+
+	local wantRealm = normalizeRealmName(realm)
+	local wantCharacter = character:lower()
+	local matches = {}
+	for key, entry in pairs(WowAHTrackerRealmRosterDB.characters) do
+		if normalizeRealmName(entry.realm) == wantRealm and (entry.character or ""):lower() == wantCharacter then
+			table.insert(matches, key)
+		end
+	end
+
+	if #matches == 0 then
+		printMsg(string.format('No roster entry matches "%s" on "%s". /waht realms shows the roster (Export lists every entry).', character, realm))
+		return
+	end
+	if #matches > 1 then
+		printMsg(string.format('"%s" on "%s" matches %d roster entries - not removing anything; be more specific.', character, realm, #matches))
+		return
+	end
+
+	local key = matches[1]
+	local entry = WowAHTrackerRealmRosterDB.characters[key]
+	WowAHTrackerRealmRosterDB.characters[key] = nil
+	printMsg(
+		string.format(
+			"Removed %s (%s) from the realm roster. It reaches the DB on logout or /reload, then the next Push Earnings.",
+			entry.character or "?",
+			entry.realm or "?"
+		)
+	)
+	if frame and frame:IsShown() then
+		RefreshList()
+	end
+end
+
 local loader = CreateFrame("Frame")
 loader:RegisterEvent("ADDON_LOADED")
 loader:SetScript("OnEvent", function(_, _, addonName)

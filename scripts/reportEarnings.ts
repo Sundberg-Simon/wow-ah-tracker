@@ -20,6 +20,8 @@ import { fileURLToPath } from "node:url";
 import { pool } from "../src/db/pool.js";
 import { EARNINGS_ACCOUNTS, accountLabel } from "../config/earningsAccounts.js";
 import { trackedItems } from "../config/trackedItems.js";
+import { computeStock, type StockReport } from "../src/earnings/stock.js";
+import { stockSectionHtml } from "../src/earnings/stockHtml.js";
 import {
   computeEarnings,
   SPLITS,
@@ -81,10 +83,10 @@ function trackedItemRecs() {
 }
 
 async function loadInputs(now: Date) {
-  const [sales, purchases, roster, realms, history, ingest, captures] = await Promise.all([
+  const [sales, purchases, roster, realms, history, ingest, captures, stockObs, stockHeld] = await Promise.all([
     pool.query("SELECT account, realm_name, character_name, captured_at, net_copper, item_name, item_id, quantity FROM earnings_sales"),
     pool.query("SELECT account, realm_name, character_name, captured_at, total_paid_copper FROM earnings_purchases"),
-    pool.query("SELECT realm_name, character_name FROM roster_characters"),
+    pool.query("SELECT account, realm_name, character_name FROM roster_characters"),
     pool.query("SELECT connected_realm_id, realm_names FROM connected_realms"),
     pool.query("SELECT connected_realm_id, population, observed_at FROM realm_population_history ORDER BY observed_at, id"),
     pool.query(
@@ -97,6 +99,8 @@ async function loadInputs(now: Date) {
        FROM (SELECT account, captured_at, 's' AS kind FROM earnings_sales
              UNION ALL SELECT account, captured_at, 'p' FROM earnings_purchases) x GROUP BY account`,
     ),
+    pool.query("SELECT account, realm_name, character_name, source, item_id, quantity, observed_at FROM stock_observations"),
+    pool.query("SELECT realm_name, character_name, item_id FROM stock_held"),
   ]);
 
   const populationHistory = new Map<number, PopulationObservation[]>();
@@ -144,6 +148,25 @@ async function loadInputs(now: Date) {
       accounts: EARNINGS_ACCOUNTS.map((a) => a.folder) as string[],
       // ALL tracked items, inactive included, so a retired item's past sales still classify.
       trackedItems: trackedItemRecs(),
+      now,
+    },
+    // Crafted-item stock (CLAUDE.md #15): current-state view, independent of the
+    // window/split controls, computed from the same DB by src/earnings/stock.ts.
+    stockInputs: {
+      craftedItems: trackedItems.filter((i) => i.active && i.crafted === true).map((i) => ({ id: i.id, name: i.name })),
+      observations: stockObs.rows.map((r) => ({
+        account: r.account as string,
+        realmName: r.realm_name as string,
+        characterName: r.character_name as string,
+        source: r.source as string,
+        itemId: r.item_id as number,
+        quantity: Number(r.quantity),
+        observedAt: r.observed_at as Date,
+      })),
+      held: stockHeld.rows.map((r) => ({ realmName: r.realm_name as string, characterName: r.character_name as string, itemId: r.item_id as number })),
+      roster: roster.rows.map((r) => ({ account: r.account as string, realmName: r.realm_name as string, characterName: r.character_name as string })),
+      sales: sales.rows.map((r) => ({ itemName: r.item_name as string, realmName: r.realm_name as string })),
+      connectedRealms: realms.rows.map((r) => ({ id: r.connected_realm_id as number, names: r.realm_names as string[] })),
       now,
     },
     freshness,
@@ -304,7 +327,7 @@ function splitSectionHtml(
 </section>`;
 }
 
-function buildHtml(report: EarningsReport, freshness: Freshness[]): string {
+function buildHtml(report: EarningsReport, freshness: Freshness[], stock: StockReport): string {
   const now = report.generatedAt;
   const hasPatchItems = trackedItems.some((i) => i.active && i.category === "patch-specific");
 
@@ -377,6 +400,15 @@ function buildHtml(report: EarningsReport, freshness: Freshness[]): string {
   .empty { color: var(--muted); font-style: italic; }
   .warn { color: #d97706; font-size: 0.85em; }
   td.neg { color: #dc2626; }
+  .stock-section { border: 1px solid var(--line); border-radius: 8px; padding: 0.2rem 1rem 0.8rem; margin: 1.5rem 0; }
+  .stock-section h3 { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+  .badge { display: inline-block; font-size: 0.72em; font-weight: 700; letter-spacing: 0.03em; border-radius: 4px; padding: 0.05rem 0.45rem; color: #fff; background: #6b7280; }
+  .badge.out { background: #dc2626; }
+  .badge.low { background: #d97706; }
+  .badge.unknown { background: #6b7280; }
+  .badge.ok { background: #16a34a; }
+  table.stock td { vertical-align: top; }
+  table.stock tr.stock-out td, table.stock tr.stock-low td { background: color-mix(in srgb, #dc2626 8%, transparent); }
   ul.best { margin: 0.2rem 0; padding-left: 1.2rem; }
   .notes { color: var(--muted); font-size: 0.85em; border-top: 1px solid var(--line); margin-top: 2.5rem; padding-top: 1rem; }
   .notes li { margin-bottom: 0.3rem; }
@@ -393,6 +425,8 @@ function buildHtml(report: EarningsReport, freshness: Freshness[]): string {
   </table>
   <p class="muted">WoW only writes its data file on logout or /reload, so recent play may not be here until the next push (Push Earnings shortcut or the daily task).</p>
   ${unclassifiedNote}
+
+  ${stockSectionHtml(stock, now, accountLabel)}
 
   <div class="controls">
     <div class="row"><span>Characters</span>${splitButtons}</div>
@@ -461,16 +495,23 @@ function buildHtml(report: EarningsReport, freshness: Freshness[]): string {
 
 async function main() {
   const now = new Date();
-  const { inputs, freshness } = await loadInputs(now);
+  const { inputs, stockInputs, freshness } = await loadInputs(now);
   const report = computeEarnings(inputs);
+  const stock = computeStock(stockInputs);
 
   const outDir = path.join(__dirname, "../reports-private");
   mkdirSync(outDir, { recursive: true });
   const outPath = path.join(outDir, "earnings.html");
-  writeFileSync(outPath, buildHtml(report, freshness), "utf8");
+  writeFileSync(outPath, buildHtml(report, freshness, stock), "utf8");
 
   const allTime = report.windows.find((w) => w.key === "all")!.splits;
   console.log(`Earnings report written to ${outPath}`);
+  for (const item of stock.items) {
+    console.log(
+      `  Stock ${item.item.name}: ${item.rows.length} cluster(s) in scope - ` +
+        `${item.counts.OUT} out, ${item.counts.LOW} low, ${item.counts.UNKNOWN} unknown, ${item.counts.OK} ok`,
+    );
+  }
   console.log(
     `  All-time net: cross-realm ${gold(allTime.cross.overall.netCopper)} (${allTime.cross.overall.salesCount} sales), ` +
       `other ${gold(allTime.other.overall.netCopper)} (${allTime.other.overall.salesCount}), all ${gold(allTime.all.overall.netCopper)} (${allTime.all.overall.salesCount})`,
