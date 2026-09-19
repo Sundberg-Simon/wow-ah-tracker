@@ -11,6 +11,8 @@
     "query": "tsx scripts/queryHistory.ts",
     "report": "tsx scripts/report.ts",
     "health": "tsx scripts/healthCheck.ts",
+    "ingest": "tsx scripts/ingestSavedVariables.ts",
+    "report:earnings": "tsx scripts/reportEarnings.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -18,8 +20,10 @@
     "pg": "^8.12.0"
   },
   "devDependencies": {
+    "@types/luaparse": "^0.2.13",
     "@types/node": "^22.5.0",
     "@types/pg": "^8.11.6",
+    "luaparse": "^0.3.1",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
   }
