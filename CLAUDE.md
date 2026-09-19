@@ -295,6 +295,24 @@ eftersom.]
       tracked-listan (crafting-mats m.m.), och utan den försvinner de ur
       item-vyn. Aggregeringen kontrollerar att listorna summerar till
       rapportens sales/netto-totaler.
+    - **Crafted-flagga och uppskattad vinst** (rapport-only, medvetet enkel
+      första version): varje tracked item kan ha `crafted` (bool, saknas =
+      false) och `est_cost_per_unit` (GULD per enhet, nullable) i
+      `config/trackedItems.json`. Ortogonalt mot permanent/patch-specific
+      och läses ALDRIG av synken, `data.lua` eller addonet — kan alltså inte
+      påverka insamlingen. Item-listorna får kolumnen "Est. profit" =
+      netto − kostnad × units (units i den valda vyn), BARA där kostnad är
+      satt; ett crafted item utan kostnad visar "cost not set" (aldrig netto
+      som om det vore vinst), övriga visar streck. Uppskattningen markeras
+      "≈" och förklarar sig vid hover; kostnad 0 räknas som satt, null inte.
+      Handskrivna värden valideras strikt av RAPPORTEN (t.ex. "350g" eller
+      negativt får rapporten att faila högt, med item och fält utpekade) —
+      inte av synken, så ett stavfel kan inte stoppa insamlingen. Ingen
+      automatisk mats-prisspårning: Simon uppdaterar kostnaden för hand; om
+      det visar sig för grovt är verklig matsspårning ett separat, framtida
+      beslut. OBS: filen är publik (#8) — en kostnad man skriver dit
+      publiceras om filen pushas. Vial of the Sands (65891) och Sky Golem
+      (95416) lades dit 2026-09-19 som permanent + crafted (kostnad ej satt).
     - **Trigger**: genvägen "WoW AH Tracker - Push Earnings" på skrivbordet
       + den schemalagda uppgiften `WowAhTrackerPushEarnings` (dagligen
       09:00, `StartWhenAvailable`) kör båda `scripts/windows/Push-Earnings.ps1`
