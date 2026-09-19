@@ -281,6 +281,20 @@ eftersom.]
       `realm_population_history` (skrivs i `runFullSync`s commit-transaktion
       bakom en savepoint så den aldrig kan fälla en prissnapshot; bara
       när en tier ändras; äldre records faller tillbaka på tidigast kända).
+    - **"Mest sålda items"-listor** (i varje vy, respekterar Characters-/
+      Window-filtren; sortering på antal sales eller netto-guld via
+      "Sort items"): tre listor — patch-specifika, permanenta och "Not on
+      the tracked list". Items klassas vid rapporttillfället mot
+      `config/trackedItems.json` (ALLA items, även inaktiva), via item_id
+      om den finns, annars via namn (skiftläges-/blankstegsokänsligt).
+      `earnings_sales.item_id` är NULL på alla sales hittills (addonet kan
+      bara slå upp id mot tracked-listan som den såg ut vid capture), så
+      namnet är det som identifierar itemet — klassa ALDRIG in item-typ som
+      lagrad kolumn, av samma skäl som cross-realm/other. Den tredje
+      listan behövs på riktigt: 9 av de första 21 sales var items utanför
+      tracked-listan (crafting-mats m.m.), och utan den försvinner de ur
+      item-vyn. Aggregeringen kontrollerar att listorna summerar till
+      rapportens sales/netto-totaler.
     - **Trigger**: genvägen "WoW AH Tracker - Push Earnings" på skrivbordet
       + den schemalagda uppgiften `WowAhTrackerPushEarnings` (dagligen
       09:00, `StartWhenAvailable`) kör båda `scripts/windows/Push-Earnings.ps1`
