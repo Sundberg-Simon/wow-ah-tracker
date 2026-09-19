@@ -445,12 +445,17 @@ local function printSales()
 	EnsureDB()
 	local sales = WowAHTrackerSalesDB.sales
 	printMsg(string.format("Captured sales: %d", #sales))
+	-- Split against the roster as it stands right now - see the note on
+	-- WowAHTrackerRealmRoster_Classify (RealmRoster.lua) for why this is never
+	-- cached on the sale record.
+	WowAHTrackerRealmRoster_PrintTally(sales, "netReceived", "sales", "net", copperToGoldString)
 	local from = math.max(1, #sales - 9)
 	for i = #sales, from, -1 do
 		local sale = sales[i]
 		DEFAULT_CHAT_FRAME:AddMessage(
 			string.format(
-				"  %s | %s x%d | %s | net %s | %s",
+				"  %s %s | %s x%d | %s | net %s | %s",
+				WowAHTrackerRealmRoster_Tag(sale),
 				sale.capturedAt or "?",
 				sale.itemName or "?",
 				sale.count or 1,

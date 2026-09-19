@@ -61,11 +61,107 @@ local function findConnectedRealmIdForRealm(realmName)
 	return nil
 end
 
+-- The one place the roster's "realm|character" key is built - AddCurrentCharacter
+-- writes with it and the sale/purchase classifier below reads with it, so the
+-- two can't drift apart.
+local function rosterKey(realm, character)
+	return realm .. "|" .. character
+end
+
+-- "Cross-realm stuff" vs "other stuff" classification for the sales/purchase
+-- totals (requested 2026-09-19: Simon will earn gold on characters outside the
+-- 81-character roster and wants those tallied separately from the registered
+-- cross-realm operation, never blended).
+--
+-- DELIBERATELY computed on demand against the roster as it stands right now,
+-- never stored on the sale/purchase record: if a character is added to the
+-- roster later, every sale/purchase it already logged reclassifies as
+-- cross-realm the next time a total is computed. Do not "optimize" this by
+-- caching a bucket on the record at capture time - that would freeze the
+-- classification that applied back then and silently defeat the requirement.
+--
+-- Returns "cross" (record's realm|character is on the roster), "other" (it
+-- isn't), or nil when the record has no realm/character to match on at all
+-- (can't be classified either way - callers show these separately rather than
+-- guessing a bucket). A missing/never-opened roster DB just means "nothing is
+-- on the roster", so everything is "other" - no error, and no EnsureDB here
+-- since this is a pure read.
+function WowAHTrackerRealmRoster_Classify(record)
+	if not record.realm or not record.character then
+		return nil
+	end
+	local db = WowAHTrackerRealmRosterDB
+	if db and db.characters and db.characters[rosterKey(record.realm, record.character)] then
+		return "cross"
+	end
+	return "other"
+end
+
+-- Sums a list of sale/purchase records into the two buckets (plus an
+-- "unclassified" one for records with no realm/character). `amountField` is
+-- the record field to total - netReceived for sales, totalPricePaid for
+-- purchases. Copper in, copper out.
+function WowAHTrackerRealmRoster_Tally(records, amountField)
+	local tally = {
+		cross = { count = 0, total = 0 },
+		other = { count = 0, total = 0 },
+		unclassified = { count = 0, total = 0 },
+	}
+	for _, record in ipairs(records) do
+		local bucket = tally[WowAHTrackerRealmRoster_Classify(record) or "unclassified"]
+		bucket.count = bucket.count + 1
+		bucket.total = bucket.total + (record[amountField] or 0)
+	end
+	return tally
+end
+
+-- True when this account's roster has no characters yet - every record then
+-- (correctly, per the rule) lands in "other", which is worth flagging to the
+-- player as probably-not-what-they-expect rather than presenting silently.
+function WowAHTrackerRealmRoster_IsEmpty()
+	local db = WowAHTrackerRealmRosterDB
+	return not db or not db.characters or next(db.characters) == nil
+end
+
+-- Short colored prefix for a single row in the "recent" lists, so it's clear
+-- which bucket each individual line counts toward.
+function WowAHTrackerRealmRoster_Tag(record)
+	local bucket = WowAHTrackerRealmRoster_Classify(record)
+	if bucket == "cross" then
+		return "|cff33ff99[cross-realm]|r"
+	elseif bucket == "other" then
+		return "|cffffcc00[other]|r"
+	end
+	return "|cff999999[unclassified]|r"
+end
+
+-- Prints the two tallies as separate, labeled lines - never a combined total.
+-- Shared by /waht sales and /waht purchases so the two can't drift apart in
+-- layout. `noun` is "sales"/"purchases", `amountWord` is "net"/"paid",
+-- `formatAmount` turns copper into the caller's display string. The
+-- unclassified line only appears when there's actually something in it.
+function WowAHTrackerRealmRoster_PrintTally(records, amountField, noun, amountWord, formatAmount)
+	local tally = WowAHTrackerRealmRoster_Tally(records, amountField)
+	local function line(label, bucket)
+		DEFAULT_CHAT_FRAME:AddMessage(
+			string.format("  %s: %d %s, %s %s", label, bucket.count, noun, amountWord, formatAmount(bucket.total))
+		)
+	end
+	line("|cff33ff99CROSS-REALM stuff|r", tally.cross)
+	line("|cffffcc00OTHER stuff|r", tally.other)
+	if tally.unclassified.count > 0 then
+		line("|cff999999Unclassified (no realm/character on record)|r", tally.unclassified)
+	end
+	if WowAHTrackerRealmRoster_IsEmpty() then
+		printMsg("Note: this account's realm roster is empty, so everything counts as OTHER. Run /waht realms and add characters.")
+	end
+end
+
 local function AddCurrentCharacter()
 	EnsureDB()
 	local realm = GetRealmName()
 	local character = UnitName("player")
-	local key = realm .. "|" .. character
+	local key = rosterKey(realm, character)
 	local connectedRealmId = findConnectedRealmIdForRealm(realm)
 
 	WowAHTrackerRealmRosterDB.characters[key] = {
