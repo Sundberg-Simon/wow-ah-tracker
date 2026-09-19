@@ -243,13 +243,26 @@ function profitCell(r: ItemRow): string {
   return `<td class="num muted">&ndash;</td>`;
 }
 
+// Random-suffix variants ("Drustwrought Scythe of the Aurora") are merged into their
+// base item's row (CLAUDE.md #11); this keeps which variants sold visible instead of
+// silently hiding them. Shows just the suffix part next to the name, full names on hover.
+function variantNote(r: ItemRow): string {
+  if (r.variants.length === 0) return "";
+  const short = r.variants.map((v) => {
+    const suffix = v.name.toLowerCase().startsWith(r.name.toLowerCase()) ? v.name.slice(r.name.length).trim() : v.name;
+    return `${suffix || v.name}${v.count > 1 ? ` ×${v.count}` : ""}`;
+  });
+  const full = r.variants.map((v) => `${v.name}${v.count > 1 ? ` ×${v.count}` : ""}`).join("; ");
+  return ` <span class="muted" title="${escapeHtml(`Sold as: ${full}`)}">(sold as: ${escapeHtml(short.join(", "))})</span>`;
+}
+
 function itemTable(rows: ItemRow[], emptyMessage: string): string {
   if (rows.length === 0) return `<p class="empty">${escapeHtml(emptyMessage)}</p>`;
   const body = rows
     .map(
       (r, i) =>
         `<tr data-sales="${r.salesCount}" data-net="${r.netCopper}" data-name="${escapeHtml(r.name.toLowerCase())}">` +
-        `<td class="num rank">${i + 1}</td><td>${escapeHtml(r.name)}${r.crafted ? ' <span class="muted">(crafted)</span>' : ""}</td>` +
+        `<td class="num rank">${i + 1}</td><td>${escapeHtml(r.name)}${r.crafted ? ' <span class="muted">(crafted)</span>' : ""}${variantNote(r)}</td>` +
         `<td class="num">${r.salesCount}</td><td class="num">${r.units}</td><td class="num">${gold(r.netCopper)}</td>` +
         `${profitCell(r)}` +
         `<td>${r.bestRealm ? bestRealmCell(r.bestRealm) : ""}</td></tr>`,

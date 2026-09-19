@@ -140,6 +140,13 @@ export interface ItemRow {
   netCopper: number;
   crafted: boolean;
   profit: ItemProfit;
+  /**
+   * Names this item actually sold under when they differ from `name` - the classic
+   * random-suffix variants ("Drustwrought Scythe of the Aurora"), which share the
+   * base item (CLAUDE.md #11) and so are merged into this one row. Kept so the
+   * report can still show which variants sold.
+   */
+  variants: { name: string; count: number }[];
   /** Where this item earned the most net gold (per connected-realm group), or null if it has no sales. */
   bestRealm: { label: string; members: string[]; netCopper: number; salesCount: number } | null;
 }
@@ -233,7 +240,16 @@ interface PreparedRecord {
   groupRealmName: string;
   members: string[];
   /** Sales only: which item, which list, how many units. */
-  item?: { key: string; label: string; group: ItemGroup; units: number; crafted: boolean; costPerUnitCopper: number | null };
+  item?: {
+    key: string;
+    label: string;
+    /** The name the sale was recorded under (may carry a random suffix). */
+    soldAs: string;
+    group: ItemGroup;
+    units: number;
+    crafted: boolean;
+    costPerUnitCopper: number | null;
+  };
 }
 
 function prepare(inputs: EarningsInputs): PreparedRecord[] {
@@ -255,19 +271,38 @@ function prepare(inputs: EarningsInputs): PreparedRecord[] {
   // list as it stood at capture), so the name is what identifies the item, and
   // the tracked list may have grown since. Same dynamic-classification rule as
   // cross-realm vs other.
+  //
+  // The sale's name comes from the mail invoice and carries any classic random
+  // suffix ("Drustwrought Scythe of the Aurora"), which the tracked list (base
+  // ids, CLAUDE.md #11) doesn't - so after an exact match fails, a name that is a
+  // tracked name followed by " of ..." counts as that item's suffix variant. The
+  // LONGEST tracked name wins ("Mace of Renewed Purpose of the Bear" is that mace,
+  // not "Mace"), and " of " is required so "Old Maceration" never matches
+  // "Old Mace".
+  const trackedLongestFirst = [...trackedByName.entries()].sort((a, b) => b[0].length - a[0].length);
+  const findTrackedByName = (name: string): TrackedItemRec | undefined => {
+    const n = normalizeItemName(name);
+    const exact = trackedByName.get(n);
+    if (exact) return exact;
+    for (const [trackedName, rec] of trackedLongestFirst) {
+      if (n.length > trackedName.length + 4 && n.startsWith(`${trackedName} of `)) return rec;
+    }
+    return undefined;
+  };
   const itemFor = (s: SaleRec): PreparedRecord["item"] => {
-    const tracked = (s.itemId !== null ? trackedById.get(s.itemId) : undefined) ?? trackedByName.get(normalizeItemName(s.itemName));
+    const tracked = (s.itemId !== null ? trackedById.get(s.itemId) : undefined) ?? findTrackedByName(s.itemName);
     return tracked
       ? {
           key: `t:${tracked.id}`,
           label: tracked.name,
+          soldAs: s.itemName,
           group: tracked.category === "patch-specific" ? "patch" : "permanent",
           units: s.quantity,
           crafted: tracked.crafted,
           // gold -> copper, rounded to a whole copper (a manual estimate like 12.5g is exact anyway)
           costPerUnitCopper: tracked.estCostPerUnitGold === null ? null : Math.round(tracked.estCostPerUnitGold * 10000),
         }
-      : { key: `n:${normalizeItemName(s.itemName)}`, label: s.itemName, group: "untracked", units: s.quantity, crafted: false, costPerUnitCopper: null };
+      : { key: `n:${normalizeItemName(s.itemName)}`, label: s.itemName, soldAs: s.itemName, group: "untracked", units: s.quantity, crafted: false, costPerUnitCopper: null };
   };
 
   const make = (
@@ -349,6 +384,8 @@ function computeSplit(records: PreparedRecord[], split: Split, accounts: string[
   interface ItemAcc {
     row: ItemRow;
     costPerUnitCopper: number | null;
+    /** Sold-as names (normalized key -> display name + count), for the variants list. */
+    variantCounts: Map<string, { name: string; count: number }>;
     realms: Map<string, { label: string; members: string[]; netCopper: number; salesCount: number }>;
   }
   const itemMap = new Map<string, ItemAcc>();
@@ -367,9 +404,11 @@ function computeSplit(records: PreparedRecord[], split: Split, accounts: string[
             netCopper: 0,
             crafted: rec.item.crafted,
             profit: { status: "none" }, // decided below, once units are summed
+            variants: [], // filled below from variantCounts
             bestRealm: null,
           },
           costPerUnitCopper: rec.item.costPerUnitCopper,
+          variantCounts: new Map(),
           realms: new Map(),
         };
         itemMap.set(rec.item.key, acc);
@@ -377,6 +416,14 @@ function computeSplit(records: PreparedRecord[], split: Split, accounts: string[
       acc.row.salesCount += 1;
       acc.row.units += rec.item.units;
       acc.row.netCopper += rec.amountCopper;
+      // Remember the exact names sold under when they differ from the item's own
+      // name (random-suffix variants merged into this row).
+      const soldKey = normalizeItemName(rec.item.soldAs);
+      if (soldKey !== normalizeItemName(rec.item.label)) {
+        const v = acc.variantCounts.get(soldKey) ?? { name: rec.item.soldAs, count: 0 };
+        v.count += 1;
+        acc.variantCounts.set(soldKey, v);
+      }
       const r = acc.realms.get(rec.groupKey) ?? { label: rec.groupRealmName, members: rec.members, netCopper: 0, salesCount: 0 };
       if (!acc.realms.has(rec.groupKey)) {
         acc.realms.set(rec.groupKey, r);
@@ -417,6 +464,7 @@ function computeSplit(records: PreparedRecord[], split: Split, accounts: string[
       (a, b) => b.netCopper - a.netCopper || b.salesCount - a.salesCount || a.label.localeCompare(b.label),
     )[0];
     acc.row.bestRealm = best ?? null;
+    acc.row.variants = [...acc.variantCounts.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
     // The current hand-set estimate is applied to every unit sold in this view.
     if (acc.costPerUnitCopper !== null) {
       acc.row.profit = {

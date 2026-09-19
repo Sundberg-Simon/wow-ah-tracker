@@ -295,6 +295,17 @@ eftersom.]
       tracked-listan (crafting-mats m.m.), och utan den försvinner de ur
       item-vyn. Aggregeringen kontrollerar att listorna summerar till
       rapportens sales/netto-totaler.
+      **Slumpsuffix-varianter** (#11/#12): mail-fakturans namn bär suffixet
+      ("Drustwrought Scythe of the Aurora") medan tracked-listan har bas-
+      namnet. Efter ett exakt namnmatch räknas därför ett namn som är ett
+      tracked namn + " of ..." som en variant av det itemet och slås ihop
+      med basraden (längsta tracked namn vinner; " of " + något efter krävs,
+      så "Old Maceration" aldrig matchar "Old Mace"). Vilka varianter som
+      sålts syns bredvid namnet ("sold as: of the Aurora"), så inget döljs.
+      Hittat 2026-09-19: en dyr sale låg felaktigt under "Not on the
+      tracked list". Addonets `findTrackedItemId` matchar fortfarande exakt
+      namn, så `earnings_sales.item_id` förblir NULL för suffixnamn — ofarligt
+      eftersom rapporten matchar på namn.
     - **Crafted-flagga och uppskattad vinst** (rapport-only, medvetet enkel
       första version): varje tracked item kan ha `crafted` (bool, saknas =
       false) och `est_cost_per_unit` (GULD per enhet, nullable) i
