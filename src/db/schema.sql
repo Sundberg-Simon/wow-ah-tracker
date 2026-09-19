@@ -78,3 +78,28 @@ ALTER TABLE connected_realms
 ALTER TABLE connected_realms
   ADD COLUMN IF NOT EXISTS population TEXT,
   ADD COLUMN IF NOT EXISTS status TEXT;
+
+-- Population tier history for the earnings report's "tier at time of sale"
+-- attribution. connected_realms only holds the current tier; this appends a
+-- row whenever a sync sees a realm's tier change (see runFullSync.ts), plus a
+-- seed row per realm from the first time this table existed. observed_at is
+-- therefore "first sync at which this value was seen", not when Blizzard
+-- actually changed it - history is only as good as the sync cadence, and
+-- doesn't exist before this table was created (earlier sales fall back to the
+-- earliest known tier in the report).
+CREATE TABLE IF NOT EXISTS realm_population_history (
+  id BIGSERIAL PRIMARY KEY,
+  connected_realm_id INTEGER NOT NULL REFERENCES connected_realms(connected_realm_id),
+  population TEXT,
+  observed_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS realm_population_history_realm_time_idx
+  ON realm_population_history (connected_realm_id, observed_at DESC);
+
+INSERT INTO realm_population_history (connected_realm_id, population, observed_at)
+SELECT cr.connected_realm_id, cr.population, now()
+FROM connected_realms cr
+WHERE NOT EXISTS (
+  SELECT 1 FROM realm_population_history h WHERE h.connected_realm_id = cr.connected_realm_id
+);

@@ -2,6 +2,7 @@ import type pg from "pg";
 import { pool } from "../db/pool.js";
 import { getActiveTrackedItemIds } from "../../config/trackedItems.js";
 import { fetchConnectedRealm, fetchConnectedRealmIds } from "./connectedRealms.js";
+import { recordPopulationChanges } from "./populationHistory.js";
 import {
   fetchTrackedAuctionsForRealm,
   fetchTrackedCommodities,
@@ -106,6 +107,21 @@ async function commitRun(
            END`,
         [realm.connectedRealmId, realm.realmNames, capturedAt, realm.population, realm.status],
       );
+    }
+
+    // Secondary feature (earnings report's "tier at time of sale") - must never
+    // be able to sink the price snapshot commit it rides along with, hence the
+    // savepoint: a failure here is logged and skipped, not propagated.
+    await client.query("SAVEPOINT population_history");
+    try {
+      const appended = await recordPopulationChanges(client, capturedAt);
+      if (appended > 0) {
+        console.log(`Recorded ${appended} realm population tier change(s).`);
+      }
+      await client.query("RELEASE SAVEPOINT population_history");
+    } catch (err) {
+      await client.query("ROLLBACK TO SAVEPOINT population_history");
+      console.warn("Population history update failed (skipped, price sync unaffected):", err);
     }
 
     const all = [...commodityObservations, ...realms.flatMap((r) => r.observations)];
