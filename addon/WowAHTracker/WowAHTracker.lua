@@ -249,6 +249,10 @@ local COMMANDS = {
 		desc = "Show the last 25 mailbox scan traces, for diagnosing the purchase log if something looks off.",
 	},
 	{ usage = "/waht realms", desc = "Open the realm roster - add this character and see EU connected-realm coverage." },
+	{
+		usage = "/waht stockprobe [item id or name]",
+		desc = "Report what the client can see of Vial of the Sands / Sky Golem stock (bags, bank, Warband bank, mail, own auctions) right now - run it with everything closed, then at the bank, mailbox and Auction House.",
+	},
 	{ usage = "/waht help", desc = "List all commands (this)." },
 }
 
@@ -303,6 +307,12 @@ SlashCmdList["WOWAHTRACKER"] = function(msg)
 			WowAHTrackerRealmRoster_Toggle()
 		else
 			printMsg("Realm roster failed to load - check for a Lua error at login.")
+		end
+	elseif command == "stockprobe" then
+		if WowAHTrackerStock_Probe then
+			WowAHTrackerStock_Probe(rest)
+		else
+			printMsg("Stock module failed to load - check for a Lua error at login (a full game restart is needed after the .toc changed).")
 		end
 	elseif command == "help" then
 		printHelp()
