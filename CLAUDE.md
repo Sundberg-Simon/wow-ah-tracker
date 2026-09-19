@@ -407,8 +407,44 @@ eftersom.]
       "publicera" — tolkningen är inte bekräftad, så default = lokalt.)
       Tvärkonto-summor i spelet skulle i så fall komma från en lokalt
       genererad fil, inte via Pages.
-    - **Probe-fynd att verifiera i spelet**: se "Obligatoriskt sista steg" —
-      addon-kod är inte klar förrän Simon kört den.
+    - **Probe-fynd (körd i spelet 2026-09-19, probe #3–#7 på <character>@<realm>,
+      inga Lua-fel; #1–#2 var körda på fel karaktär och ignoreras)**:
+      * Väskor är alltid läsbara live (C_Container-scan = `GetItemCount`
+        default).
+      * Bank: direkt containerscan ger `slots=0` för ALLA banktabbar när
+        banken är stängd. Med banken öppen: `CharacterBankTab_1` 98 slots
+        (flikar 2–6 = 0, ej köpta), `AccountBankTab_1–5` 98 slots vardera;
+        föremålet hittades i `AccountBankTab_4`. Vid banken rapporteras
+        interaktionen som `Banker`=OPEN (INTE `CharacterBanker`/
+        `AccountBanker`); `C_Bank.CanViewBank` Character=true, Account=true
+        bara vid banken.
+      * `GetItemCount`: default = bara väskor; 2:a argumentet (`+bank`)
+        karaktärsbank; 5:e argumentet (`includeAccountBank`) räknade
+        Warband-föremålet (1) medan banken var öppen. Den räknar INTE
+        mailbilagor eller egna auktionslistningar (mail=1 resp. AH active=1
+        gav 0 i alla varianter).
+      * Mail: `GetInboxItem` läser bilagor bara med öppen brevlåda ("1 of 1
+        mails loaded"); stängd = "0 of 0" (stämmer med tidigare SalesLog-trace).
+      * Egna auktioner: `GetOwnedAuctionInfo` ger hela listan bara med AH
+        öppen (61 egna auktioner, `full results=true`, Vial Active=1);
+        stängd = 0 auktioner, `full results=false`.
+      * Allt stängt (probe #7) med föremålet listat på AH: allt utom
+        väskor osynligt — 0 i varenda källa.
+      * `Enum.BagIndex` i denna klient: Keyring=-1, Characterbanktab=-2,
+        Accountbanktab=-3, CharacterBankTab_1..6 = 6..11, AccountBankTab_1..5
+        = 12..16; INGEN Bank-/Reagentbank-medlem (den gamla reagentbanken
+        finns inte längre). Runtime-upptäckten i proben var rätt val.
+      * EJ avgjort: om `GetItemCount(+bank/+warband)` räknar banken när den
+        är STÄNGD — föremålet låg aldrig i en bank vid ett stängt tillfälle
+        (väska → Warband → mail → AH). Kräver en extra körning: lägg ett
+        Vial i banken, stäng den, kör `/waht stockprobe`.
+      * **Konsekvens**: bara väskor är live. Bank, Warband, mail och egna
+        AH-listningar är ögonblicksbilder från senaste besök, var och en med
+        egen tid. Ett kluster vars lager ligger på AH ser ut som "0 i
+        väskor" — en pipeline med bara väskor ger alltså falska "slut"-
+        flaggor; AH-listningar (fullständig lista, händelsestyrd) behövs
+        redan i steg 2. AH-listningar går ut inom max 48 h och mail efter 30
+        dygn, så en ögonblicksbild äldre än så räknas som okänd, inte som 0.
 
 ## Vad som är byggt och verifierat hittills
 - **Milestone 1**: OAuth-token, connected-realm-upplösning, per-realm-
