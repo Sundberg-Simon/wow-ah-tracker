@@ -368,6 +368,48 @@ eftersom.]
       INTE kopplat till CI/cron; se #4 för varför det inte strider mot
       "historik raderas aldrig".
 
+15. **Lagerkoll för crafted items (pågår, byggs stegvis).** Mål: räkna hur
+    många av varje crafted item (`crafted: true` i trackedItems.json — nu
+    Vial of the Sands och Sky Golem) Simon har kvar per realm-kluster
+    (samma connected-realm-gruppering som "Best realm"), och flagga kluster
+    som börjar ta slut. **Rapporten är huvudplatsen** (lagret är utspritt
+    på 3 konton och rapporten är enda stället med en samlad överblick);
+    `/waht` i spelet är en snabbkoll per karaktär. Omfattning: BARA crafted
+    items, inte alla tracked.
+    - **Bekräftat före bygget (2026-09-19)**: addonet gjorde INGEN
+      lagerräkning förut. Categorizern listar väskinnehåll (väskor 0–4 +
+      reagentväska) men läser aldrig stack counts och sparar inget om
+      innehållet; sale/purchase-loggarna läser mail-*fakturarubriker*
+      (`GetInboxInvoiceInfo`), aldrig bilagor; ingen bank, ingen Warband-
+      bank, inga egna auktionslistningar. Alltså ny mark.
+    - **Stegordning**: (1) `/waht stockprobe` (`Stock.lua`) — läser bara och
+      rapporterar vad varje API faktiskt returnerar just nu, eftersom API-
+      dokumentationen inte avgör t.ex. om stängd bank går att läsa; (2)
+      pipeline med bara väskor (snapshot per karaktär → ny SavedVariables-
+      tabell `WowAHTrackerStockDB` → ingest → rapportrad + `/waht stock`);
+      (3) lägg till fler källor en i taget. `.toc` ändrades (ny fil + ny
+      SavedVariables) → kräver full omstart av WoW, inte bara `/reload`.
+    - **Designförslag (ej låsta)**: källor = väskor + karaktärsbank +
+      egna aktiva auktionslistningar + mailbilagor (returnerade utgångna
+      auktioner räknas dit); Warband-banken visas som en SEPARAT rad, aldrig
+      inne i ett klusters summa (delad pool, kan inte knytas till ett
+      kluster, dubbelräkning om man summerar per karaktär). Varje källa har
+      egen "senast skannad"-tid; en karaktär som aldrig skannats är
+      "okänd", ALDRIG 0 (falskt larm och falsk trygghet är båda dåliga).
+      Tröskel: flagga när antal ≤ `low_stock_threshold` (default 0,
+      konfigurerbart per item i trackedItems.json senare); flagga bara
+      kluster där itemet har hållits eller sålts tidigare, annars blir det
+      ~80 kluster med "0, aldrig lagrat" som brus.
+    - **Integritet**: lagersiffror hör till samma kategori som intäkter
+      (#13): lägg dem ALDRIG i `data.lua`/`report.ts`/något som Pages
+      publicerar utan att Simon uttryckligen säger det. (Ett svar på
+      lokalt-bara-frågan lästes som "rapporten är huvudplatsen", inte som
+      "publicera" — tolkningen är inte bekräftad, så default = lokalt.)
+      Tvärkonto-summor i spelet skulle i så fall komma från en lokalt
+      genererad fil, inte via Pages.
+    - **Probe-fynd att verifiera i spelet**: se "Obligatoriskt sista steg" —
+      addon-kod är inte klar förrän Simon kört den.
+
 ## Vad som är byggt och verifierat hittills
 - **Milestone 1**: OAuth-token, connected-realm-upplösning, per-realm-
   och commodity-filtrering mot riktiga item-ID:n (128671, 72145 m.fl.) —
