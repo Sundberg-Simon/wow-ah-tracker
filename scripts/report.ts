@@ -33,6 +33,8 @@ interface ItemData {
   id: number;
   name: string;
   category: TrackedItem["category"];
+  /** Hand-set in trackedItems.json; exported to data.lua for the addon's crafted-item stock scan. */
+  crafted: boolean;
   capturedAt: Date | null;
   euMinCopper: number | null;
   euMedianCopper: number | null;
@@ -60,6 +62,7 @@ async function gatherItemData(item: TrackedItem): Promise<ItemData> {
       id: item.id,
       name: item.name,
       category: item.category,
+      crafted: item.crafted === true,
       capturedAt: null,
       euMinCopper: null,
       euMedianCopper: null,
@@ -79,6 +82,7 @@ async function gatherItemData(item: TrackedItem): Promise<ItemData> {
       id: item.id,
       name: item.name,
       category: item.category,
+      crafted: item.crafted === true,
       capturedAt: null,
       euMinCopper: null,
       euMedianCopper: null,
@@ -93,6 +97,7 @@ async function gatherItemData(item: TrackedItem): Promise<ItemData> {
     id: item.id,
     name: item.name,
     category: item.category,
+      crafted: item.crafted === true,
     capturedAt,
     euMinCopper: Math.min(...prices),
     euMedianCopper: median(prices),
@@ -291,7 +296,7 @@ function buildLuaItemEntry(data: ItemData): string {
     id = ${data.id},
     name = ${luaString(data.name)},
     category = ${luaString(data.category)},
-    capturedAt = ${data.capturedAt ? luaString(data.capturedAt.toISOString()) : "nil"},
+${data.crafted ? "    crafted = true,\n" : ""}    capturedAt = ${data.capturedAt ? luaString(data.capturedAt.toISOString()) : "nil"},
     euMinCopper = ${luaNumberOrNil(data.euMinCopper)},
     euMedianCopper = ${luaNumberOrNil(data.euMedianCopper)},
     totalQuantity = ${data.totalQuantity},
