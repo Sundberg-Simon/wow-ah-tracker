@@ -199,3 +199,29 @@ FROM connected_realms cr
 WHERE NOT EXISTS (
   SELECT 1 FROM realm_population_history h WHERE h.connected_realm_id = cr.connected_realm_id
 );
+
+-- Thinned-out auction snapshots (scripts/rollupSnapshots.ts, CLAUDE.md #4/#14).
+-- price_snapshots is a running observation of the market for patch-specific
+-- items, not bookkeeping - old rows may be replaced by one aggregate row per
+-- item/realm/bucket (day or week) to bound storage. Sale/purchase data is
+-- never touched by this. Rows here are created only by that script, only from
+-- complete (successful, non-partial) runs, and only for buckets entirely older
+-- than the keep-window - a bucket is never split between raw and rolled-up rows.
+CREATE TABLE IF NOT EXISTS price_snapshots_rollup (
+  item_id INTEGER NOT NULL,
+  connected_realm_id INTEGER REFERENCES connected_realms(connected_realm_id),
+  bucket_start TIMESTAMPTZ NOT NULL,
+  bucket_days INTEGER NOT NULL,
+  min_price_copper_min BIGINT NOT NULL,
+  min_price_copper_avg BIGINT NOT NULL,
+  quantity_avg BIGINT NOT NULL,
+  quantity_max BIGINT NOT NULL,
+  listing_count_avg INTEGER NOT NULL,
+  samples INTEGER NOT NULL,
+  rolled_up_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- COALESCE for the same reason as price_snapshots_run_item_realm_uidx:
+-- connected_realm_id is NULL for commodities.
+CREATE UNIQUE INDEX IF NOT EXISTS price_snapshots_rollup_uidx
+  ON price_snapshots_rollup (item_id, COALESCE(connected_realm_id, 0), bucket_start, bucket_days);

@@ -13,6 +13,7 @@
     "health": "tsx scripts/healthCheck.ts",
     "ingest": "tsx scripts/ingestSavedVariables.ts",
     "report:earnings": "tsx scripts/reportEarnings.ts",
+    "rollup": "tsx scripts/rollupSnapshots.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
