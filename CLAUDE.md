@@ -324,6 +324,15 @@ eftersom.]
       beslut. OBS: filen är publik (#8) — en kostnad man skriver dit
       publiceras om filen pushas. Vial of the Sands (65891) och Sky Golem
       (95416) lades dit 2026-09-19 som permanent + crafted (kostnad ej satt).
+    - **Rapportens layout (2026-09-20)**: ett fast banner överst med två
+      flikar, **Earnings** och **Stock**, så att de två blir separata sidor i
+      stället för en lång. Earnings-fliken har filtren (Characters/Window/
+      Sort items), datafärskhetstabellen, alla vyer och noterna; Stock-fliken
+      har bara lagersektionen (filtren döljs). En rad "Last pushed to the
+      DB" ligger ovanför båda (båda beror på senaste pushen) och Stock-
+      knappen visar ett rött antal när kluster är OUT/LOW. Länkar: `#stock`
+      öppnar Stock; `#split-window[-sort]` öppnar Earnings som förut (gamla
+      länkar funkar). Att växla flik behåller Earnings-filtren.
     - **Trigger**: genvägen "WoW AH Tracker - Push Earnings" på skrivbordet
       + den schemalagda uppgiften `WowAhTrackerPushEarnings` (dagligen
       09:00, `StartWhenAvailable`) kör båda `scripts/windows/Push-Earnings.ps1`

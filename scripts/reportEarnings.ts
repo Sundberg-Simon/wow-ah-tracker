@@ -367,6 +367,24 @@ function buildHtml(report: EarningsReport, freshness: Freshness[], stock: StockR
     .map(([key, label]) => `<button type="button" data-set-sort="${key}"${key === DEFAULT_SORT ? ' class="on"' : ""}>${label}</button>`)
     .join("");
 
+  // The banner: choose Earnings or Stock. The Stock tab carries a red count when any
+  // cluster is out/low, so it's visible from the Earnings side without switching.
+  const flaggedStock = stock.items.reduce((n, i) => n + i.counts.OUT + i.counts.LOW, 0);
+  const stockBadge = flaggedStock > 0 ? `<span class="badge out">${flaggedStock} out/low</span>` : "";
+  const tabButtons =
+    `<button type="button" role="tab" data-set-tab="earnings" class="on">Earnings</button>` +
+    `<button type="button" role="tab" data-set-tab="stock">Stock ${stockBadge}</button>`;
+
+  // One line of "how fresh is this data" that stays above BOTH tabs (both depend on the
+  // last push); the detailed per-account table lives on the Earnings tab.
+  const pushSummary = freshness
+    .map((f) => {
+      const ageHours = f.lastIngest ? (now.getTime() - f.lastIngest.getTime()) / 3600000 : Infinity;
+      const stale = ageHours > STALE_HOURS ? ` <span class="warn">stale</span>` : "";
+      return `${escapeHtml(accountLabel(f.account))} ${escapeHtml(localDateTime(f.lastIngest))}${stale}`;
+    })
+    .join(" &middot; ");
+
   const freshRows = freshness
     .map((f) => {
       const ageHours = f.lastIngest ? (now.getTime() - f.lastIngest.getTime()) / 3600000 : Infinity;
@@ -394,7 +412,14 @@ function buildHtml(report: EarningsReport, freshness: Freshness[], stock: StockR
   h4 { margin: 0.9rem 0 0.1rem; }
   .generated { color: var(--muted); margin-top: 0; }
   .private { display: inline-block; font-size: 0.75em; border: 1px solid var(--muted); border-radius: 4px; padding: 0 0.4em; color: var(--muted); vertical-align: middle; }
-  .controls { position: sticky; top: 0; background: Canvas; padding: 0.6rem 0; border-bottom: 1px solid var(--line); z-index: 1; }
+  /* The choice banner: two big tabs, pinned to the top. The Earnings-only filter rows live inside it and are hidden on the Stock tab. */
+  .topbar { position: sticky; top: 0; background: Canvas; padding: 0.6rem 0 0.2rem; border-bottom: 1px solid var(--line); z-index: 2; margin-top: 0.4rem; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.3rem; }
+  .tabs button { font-size: 1.05rem; font-weight: 600; padding: 0.45rem 1.4rem; border-radius: 8px; display: inline-flex; gap: 0.5rem; align-items: center; }
+  .push-line { color: var(--muted); font-size: 0.85em; margin: 0.2rem 0 0; }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+  .controls { padding: 0.2rem 0 0.4rem; }
   .controls .row { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; margin: 0.25rem 0; }
   .controls .row > span { min-width: 5.5rem; color: var(--muted); font-size: 0.85em; }
   button { font: inherit; padding: 0.25rem 0.7rem; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: inherit; cursor: pointer; }
@@ -431,6 +456,18 @@ function buildHtml(report: EarningsReport, freshness: Freshness[], stock: StockR
   <h1>Earnings <span class="private">local only &mdash; not published</span></h1>
   <p class="generated">Generated ${escapeHtml(localDateTime(now))}. Net gold earned = what actually hit the wallet from AH sales (sale price + refunded deposit &minus; AH cut).</p>
 
+  <p class="push-line">Last pushed to the DB: ${pushSummary}</p>
+
+  <div class="topbar">
+    <div class="tabs" role="tablist">${tabButtons}</div>
+    <div class="controls" id="earnings-controls">
+      <div class="row"><span>Characters</span>${splitButtons}</div>
+      <div class="row"><span>Window</span>${windowButtons}</div>
+      <div class="row"><span>Sort items</span>${sortButtons}</div>
+    </div>
+  </div>
+
+  <div class="tab-panel active" id="tab-earnings">
   <h3>Data freshness</h3>
   <table>
     <thead><tr><th>Account</th><th class="num">Sales</th><th class="num">Purchases</th><th>Newest capture</th><th>SavedVariables last saved</th><th>Last pushed to DB</th></tr></thead>
@@ -438,14 +475,6 @@ function buildHtml(report: EarningsReport, freshness: Freshness[], stock: StockR
   </table>
   <p class="muted">WoW only writes its data file on logout or /reload, so recent play may not be here until the next push (Push Earnings shortcut or the daily task).</p>
   ${unclassifiedNote}
-
-  ${stockSectionHtml(stock, now, accountLabel)}
-
-  <div class="controls">
-    <div class="row"><span>Characters</span>${splitButtons}</div>
-    <div class="row"><span>Window</span>${windowButtons}</div>
-    <div class="row"><span>Sort items</span>${sortButtons}</div>
-  </div>
 
   ${sections}
 
@@ -456,18 +485,28 @@ function buildHtml(report: EarningsReport, freshness: Freshness[], stock: StockR
     <li><strong>Est. profit</strong> (item lists) = net earned &minus; estimated cost per unit &times; units sold, shown only where a cost is set (<code>est_cost_per_unit</code>, gold per unit, in <code>config/trackedItems.json</code>). It is an <em>estimate</em> from a hand-maintained number &mdash; there is no material-price tracking &mdash; applied with today's estimate to every sale in the view. A crafted item with no cost set says &ldquo;cost not set&rdquo; instead of showing net as if it were profit; items with nothing to estimate show a dash.</li>
     <li><strong>Realms</strong> are ranked per connected-realm group (realms in a group share one auction house). Purchase spend is shown separately and not subtracted, since buying on one realm to sell on another would otherwise make buy-realms look like losses.</li>
   </ul>
+  </div>
+
+  <div class="tab-panel" id="tab-stock">
+    ${stockSectionHtml(stock, now, accountLabel)}
+  </div>
 
   <script>
     (function () {
-      var state = { split: ${JSON.stringify(DEFAULT_SPLIT)}, window: ${JSON.stringify(DEFAULT_WINDOW)}, sort: ${JSON.stringify(DEFAULT_SORT)} };
+      var state = { tab: 'earnings', split: ${JSON.stringify(DEFAULT_SPLIT)}, window: ${JSON.stringify(DEFAULT_WINDOW)}, sort: ${JSON.stringify(DEFAULT_SORT)} };
       var splits = ${JSON.stringify(SPLITS)};
       var windows = ${JSON.stringify(report.windows.map((w) => w.key))};
       var sorts = ['sales', 'net'];
-      // #split-window or #split-window-sort; anything unrecognised falls back to the defaults.
-      var m = /^#(\\w+)-(\\w+)(?:-(\\w+))?$/.exec(location.hash);
-      if (m && splits.indexOf(m[1]) >= 0 && windows.indexOf(m[2]) >= 0) {
-        state.split = m[1]; state.window = m[2];
-        if (m[3] && sorts.indexOf(m[3]) >= 0) { state.sort = m[3]; }
+      // #stock opens the Stock tab. Otherwise #split-window or #split-window-sort opens Earnings
+      // with those filters; anything unrecognised falls back to Earnings with the defaults.
+      if (location.hash === '#stock') {
+        state.tab = 'stock';
+      } else {
+        var m = /^#(\\w+)-(\\w+)(?:-(\\w+))?$/.exec(location.hash);
+        if (m && splits.indexOf(m[1]) >= 0 && windows.indexOf(m[2]) >= 0) {
+          state.split = m[1]; state.window = m[2];
+          if (m[3] && sorts.indexOf(m[3]) >= 0) { state.sort = m[3]; }
+        }
       }
       // Re-sorts every item table (all views; they're small) by sales or net gold, ties broken by the
       // other measure and then name, and renumbers the # column to match.
@@ -486,6 +525,10 @@ function buildHtml(report: EarningsReport, freshness: Freshness[], stock: StockR
       }
       function render() {
         sortItems();
+        document.querySelectorAll('.tab-panel').forEach(function (el) { el.classList.toggle('active', el.id === 'tab-' + state.tab); });
+        document.querySelectorAll('[data-set-tab]').forEach(function (b) { b.classList.toggle('on', b.dataset.setTab === state.tab); });
+        // The Characters/Window/Sort filters only mean something for Earnings.
+        document.getElementById('earnings-controls').style.display = state.tab === 'earnings' ? '' : 'none';
         document.querySelectorAll('[data-set-sort]').forEach(function (b) { b.classList.toggle('on', b.dataset.setSort === state.sort); });
         document.querySelectorAll('.view').forEach(function (el) {
           el.classList.toggle('active', el.dataset.split === state.split && el.dataset.window === state.window);
@@ -494,8 +537,11 @@ function buildHtml(report: EarningsReport, freshness: Freshness[], stock: StockR
         document.querySelectorAll('[data-set-window]').forEach(function (b) { b.classList.toggle('on', b.dataset.setWindow === state.window); });
         // Remembering the view across a reload is a nicety only: browsers may
         // refuse replaceState on file:// pages, which must not break toggling.
-        try { history.replaceState(null, '', '#' + state.split + '-' + state.window + (state.sort === 'sales' ? '' : '-' + state.sort)); } catch (e) {}
+        // Switching to Stock and back keeps your Earnings filters (state.split/window/sort are untouched).
+        var hash = state.tab === 'stock' ? '#stock' : '#' + state.split + '-' + state.window + (state.sort === 'sales' ? '' : '-' + state.sort);
+        try { history.replaceState(null, '', hash); } catch (e) {}
       }
+      document.querySelectorAll('[data-set-tab]').forEach(function (b) { b.addEventListener('click', function () { state.tab = b.dataset.setTab; render(); window.scrollTo(0, 0); }); });
       document.querySelectorAll('[data-set-split]').forEach(function (b) { b.addEventListener('click', function () { state.split = b.dataset.setSplit; render(); }); });
       document.querySelectorAll('[data-set-window]').forEach(function (b) { b.addEventListener('click', function () { state.window = b.dataset.setWindow; render(); }); });
       document.querySelectorAll('[data-set-sort]').forEach(function (b) { b.addEventListener('click', function () { state.sort = b.dataset.setSort; render(); }); });
