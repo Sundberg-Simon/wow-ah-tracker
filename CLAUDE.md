@@ -540,7 +540,9 @@ eftersom.]
     - **Lager (ordning är bindande, verifiera varje lager innan nästa)**:
       1 prospecting (KLART: batches → poolad observerad yield + expected
       output), 2 transmutes/processing-operationer (generell
-      INPUT→OUTPUT-modell), 3 intermediates (BUY vs CRAFT rekursivt), 4
+      INPUT→OUTPUT-modell — BYGGD 2026-09-20 med "Prospect Kyparite" som
+      första instans, se "Lager 2-modellen" nedan; transmutes själva är
+      ännu inte inmatade), 3 intermediates (BUY vs CRAFT rekursivt), 4
       slutprodukter (enkel end-to-end-produkt → Panther mounts → Engineering
       mounts → Vial of the Sands → övrigt). Marknadsdata
       (`get_ah_price(item, realm)`) är fristående från trackedItems/synk/
@@ -557,6 +559,43 @@ eftersom.]
       finnas under flera id (CLI vägrar tvetydiga namn); (g) ingen speldata
       hårdkodas: vilken ore som ger vilka gems kommer enbart från inmatade
       batcher; (h) `patch` är fritext-tagg med exakt matchning i filter.
+    - **Lager 2-modellen (2026-09-20)**: `operations` (kind, unikt namn,
+      `source` = varifrån receptfakta kommer) + `operation_inputs` +
+      antingen `operation_outputs` (FASTA/sannolikhets-outputs som exakta
+      bråk = FÖRVÄNTADE enheter per körning: garanterad 3 = 3/1, 1-av-5-proc
+      = 1/5) eller `operation_empirical_source` (outputs härleds vid varje
+      resolve ur inspelade prospecting-batcher, aldrig cachat). Exakt ett av
+      de två. `resolveOperation()` returnerar inputs, förväntade outputs,
+      `basis` (fixed | empirical + sample size) och `warnings` — en
+      empirisk operation utan batcher ger "UNKNOWN, not zero", aldrig tysta
+      nollor (motorn i lager 3+ får inte behandla det som "ger inget").
+      Cast-storleken är operationens input-kvantitet (inte hårdkodad).
+      `kind` valideras i koden (`OPERATION_KINDS`), inte med DB-CHECK, så ett
+      nytt kind inte kräver tabellombyggnad. Uppslag mot Blizzards static-API
+      (`item find` / `item fetch`) går via en injicerad `StaticGet`
+      (`itemLookup.ts`) som CLI:t kopplar till synkens OAuth-klient.
+    - **Verifierat mot Blizzards API 2026-09-20 (static-12.1.0-EU)**: Kyparite
+      Ore heter bara "Kyparite" (item **72093**, Tradeskill/Metal & Stone,
+      flaggad "Prospectable" under Pandaria Jewelcrafting = skill-tier 2520
+      under profession 755). "Kyparite Fragment" (97546) är ett ANNAT item.
+      Receptet "Pandaria Prospecting" (40954) har beskrivningen *"Search 5
+      Pandaria ore for precious gems. This will destroy the ore"* → cast-
+      storlek 5, men API:t har INGA strukturerade reagens/outputs för det och
+      receptet gäller alla Pandaria-ores — vad Kyparite ger kommer bara från
+      Simons batcher. Operation #1 "Prospect Kyparite" (5 × 72093,
+      empirisk) ligger i Simons lokala DB, inte i repot.
+    - **Första riktiga batchen inmatad 2026-09-20** (3 000 Kyparite, i den
+      lokala DB:n — siffrorna hör hemma där, inte här, repot är publikt).
+      Lärdomar värda att behålla: (a) `--count` måste vara ore som FAKTISKT
+      förbrukats (Simon hade hittat 200 extra; en felaktig nämnare skalar
+      alla yields tyst); (b) Simon bekräftar att Primal Diamond (76132, samma
+      Jewelcrafting-råvara som gemsen) INTE kommer från Kyparite-prospecting
+      — utelämnat item = 0 är därför korrekt där; (c) sällsynta drops (~20–30
+      träffar på 600 casts) är statistiskt tunna, fler batcher poolas
+      automatiskt och stabiliserar dem; (d) Blizzards
+      `/data/wow/search/item` behandlar flera ord som ELLER och sorterar på
+      id, så en ordagrann fraskoll måste filtreras klientsidigt
+      (`searchItemsByName` söker varje ord för sig och kräver alla).
     - **Realm-scope (avgjort 2026-09-20)**: motorn jobbar på connected-realm-
       nivå. De 81 relevanta klustren = de connected realms där Simons rostrade
       karaktärer (`/waht realms` → `roster_characters`) finns — INTE en
@@ -578,9 +617,10 @@ eftersom.]
       (olika item-id) modelleras som SEPARATA recept när den dagen kommer —
       mats är inte identiska mellan nivåerna, så ingen särskild logik för
       "samma namn, olika nivå" behövs i receptmodellen.
-    - **Fortfarande öppet / måste verifieras innan lager 2+** (hitta inte
-      på): cast-storlek och de verkliga recepten/transmutes/yields — fråga
-      Simon, hitta aldrig på speldata.
+    - **Fortfarande öppet / måste verifieras innan nästa steg** (hitta inte
+      på): Kyparites verkliga gem-yields (kräver Simons batcher), vilka
+      transmutes som ska in först och deras input/output/sannolikheter —
+      fråga Simon, hitta aldrig på speldata.
 
 ## Vad som är byggt och verifierat hittills
 - **Milestone 1**: OAuth-token, connected-realm-upplösning, per-realm-
