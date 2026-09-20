@@ -22,6 +22,10 @@ import { EARNINGS_ACCOUNTS, accountLabel } from "../config/earningsAccounts.js";
 import { trackedItems } from "../config/trackedItems.js";
 import { computeStock, type StockReport } from "../src/earnings/stock.js";
 import { stockSectionHtml } from "../src/earnings/stockHtml.js";
+import { fetchCommodityDump } from "../src/crafting/blizzardMarket.js";
+import { buildCraftingModel } from "../src/crafting/craftingReport.js";
+import { openCraftingDb } from "../src/crafting/db.js";
+import { CRAFTING_CSS, craftingTabHtml } from "../src/crafting/flowHtml.js";
 import {
   computeEarnings,
   SPLITS,
@@ -340,7 +344,36 @@ function splitSectionHtml(
 </section>`;
 }
 
-function buildHtml(report: EarningsReport, freshness: Freshness[], stock: StockReport): string {
+/**
+ * The Crafting tab, from the local crafting SQLite DB plus live commodity
+ * prices. Isolated on purpose: whatever goes wrong here (no DB, no Blizzard
+ * credentials, network down) becomes a message inside the tab, never a failed
+ * earnings report - same rule as the stock parsing in the ingest.
+ */
+async function loadCraftingTab(): Promise<{ html: string; summary: string }> {
+  let db: ReturnType<typeof openCraftingDb> | null = null;
+  try {
+    db = openCraftingDb();
+    const model = await buildCraftingModel({ db, fetchDump: fetchCommodityDump });
+    const parts = model.economics.map((e) =>
+      e.totals.profit === null ? `${e.operation.name}: profit unknown` : `${e.operation.name}: ${gold(e.totals.profit)} per ${model.executions} executions`,
+    );
+    return {
+      html: craftingTabHtml(model),
+      summary: `Crafting (${model.priceSource} prices): ${parts.join("; ") || "no operations"}`,
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      html: `<h2>Crafting</h2><p class="warn">The Crafting tab could not be built: ${escapeHtml(message)}</p>`,
+      summary: `Crafting tab failed: ${message}`,
+    };
+  } finally {
+    db?.close();
+  }
+}
+
+function buildHtml(report: EarningsReport, freshness: Freshness[], stock: StockReport, craftingHtml: string): string {
   const now = report.generatedAt;
   const hasPatchItems = trackedItems.some((i) => i.active && i.category === "patch-specific");
 
@@ -373,7 +406,8 @@ function buildHtml(report: EarningsReport, freshness: Freshness[], stock: StockR
   const stockBadge = flaggedStock > 0 ? `<span class="badge out">${flaggedStock} out/low</span>` : "";
   const tabButtons =
     `<button type="button" role="tab" data-set-tab="earnings" class="on">Earnings</button>` +
-    `<button type="button" role="tab" data-set-tab="stock">Stock ${stockBadge}</button>`;
+    `<button type="button" role="tab" data-set-tab="stock">Stock ${stockBadge}</button>` +
+    `<button type="button" role="tab" data-set-tab="crafting">Crafting</button>`;
 
   // One line of "how fresh is this data" that stays above BOTH tabs (both depend on the
   // last push); the detailed per-account table lives on the Earnings tab.
@@ -419,6 +453,7 @@ function buildHtml(report: EarningsReport, freshness: Freshness[], stock: StockR
   .push-line { color: var(--muted); font-size: 0.85em; margin: 0.2rem 0 0; }
   .tab-panel { display: none; }
   .tab-panel.active { display: block; }
+${CRAFTING_CSS}
   .controls { padding: 0.2rem 0 0.4rem; }
   .controls .row { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; margin: 0.25rem 0; }
   .controls .row > span { min-width: 5.5rem; color: var(--muted); font-size: 0.85em; }
@@ -491,6 +526,10 @@ function buildHtml(report: EarningsReport, freshness: Freshness[], stock: StockR
     ${stockSectionHtml(stock, now, accountLabel)}
   </div>
 
+  <div class="tab-panel" id="tab-crafting">
+    ${craftingHtml}
+  </div>
+
   <script>
     (function () {
       var state = { tab: 'earnings', split: ${JSON.stringify(DEFAULT_SPLIT)}, window: ${JSON.stringify(DEFAULT_WINDOW)}, sort: ${JSON.stringify(DEFAULT_SORT)} };
@@ -499,8 +538,8 @@ function buildHtml(report: EarningsReport, freshness: Freshness[], stock: StockR
       var sorts = ['sales', 'net'];
       // #stock opens the Stock tab. Otherwise #split-window or #split-window-sort opens Earnings
       // with those filters; anything unrecognised falls back to Earnings with the defaults.
-      if (location.hash === '#stock') {
-        state.tab = 'stock';
+      if (location.hash === '#stock' || location.hash === '#crafting') {
+        state.tab = location.hash.slice(1);
       } else {
         var m = /^#(\\w+)-(\\w+)(?:-(\\w+))?$/.exec(location.hash);
         if (m && splits.indexOf(m[1]) >= 0 && windows.indexOf(m[2]) >= 0) {
@@ -538,7 +577,7 @@ function buildHtml(report: EarningsReport, freshness: Freshness[], stock: StockR
         // Remembering the view across a reload is a nicety only: browsers may
         // refuse replaceState on file:// pages, which must not break toggling.
         // Switching to Stock and back keeps your Earnings filters (state.split/window/sort are untouched).
-        var hash = state.tab === 'stock' ? '#stock' : '#' + state.split + '-' + state.window + (state.sort === 'sales' ? '' : '-' + state.sort);
+        var hash = state.tab !== 'earnings' ? '#' + state.tab : '#' + state.split + '-' + state.window + (state.sort === 'sales' ? '' : '-' + state.sort);
         try { history.replaceState(null, '', hash); } catch (e) {}
       }
       document.querySelectorAll('[data-set-tab]').forEach(function (b) { b.addEventListener('click', function () { state.tab = b.dataset.setTab; render(); window.scrollTo(0, 0); }); });
@@ -561,7 +600,8 @@ async function main() {
   const outDir = path.join(__dirname, "../reports-private");
   mkdirSync(outDir, { recursive: true });
   const outPath = path.join(outDir, "earnings.html");
-  writeFileSync(outPath, buildHtml(report, freshness, stock), "utf8");
+  const crafting = await loadCraftingTab();
+  writeFileSync(outPath, buildHtml(report, freshness, stock, crafting.html), "utf8");
 
   const allTime = report.windows.find((w) => w.key === "all")!.splits;
   console.log(`Earnings report written to ${outPath}`);
@@ -571,6 +611,7 @@ async function main() {
         `${item.counts.OUT} out, ${item.counts.LOW} low, ${item.counts.UNKNOWN} unknown, ${item.counts.OK} ok`,
     );
   }
+  console.log(`  ${crafting.summary}`);
   console.log(
     `  All-time net: cross-realm ${gold(allTime.cross.overall.netCopper)} (${allTime.cross.overall.salesCount} sales), ` +
       `other ${gold(allTime.other.overall.netCopper)} (${allTime.other.overall.salesCount}), all ${gold(allTime.all.overall.netCopper)} (${allTime.all.overall.salesCount})`,
