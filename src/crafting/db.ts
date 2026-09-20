@@ -55,6 +55,42 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX prospecting_outputs_item_idx ON prospecting_batch_outputs (item_id);
   `,
+  // v2: generic operations, INPUT -> OUTPUT (layer 2)
+  `
+  CREATE TABLE operations (
+    operation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind         TEXT NOT NULL,   -- validated in code (a CHECK list would need a table rebuild per new kind)
+    name         TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    -- where the recipe facts came from, so every operation can be re-verified
+    source       TEXT,
+    created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+  );
+
+  CREATE TABLE operation_inputs (
+    operation_id INTEGER NOT NULL REFERENCES operations (operation_id) ON DELETE CASCADE,
+    item_id      INTEGER NOT NULL CHECK (item_id > 0),
+    quantity     INTEGER NOT NULL CHECK (quantity > 0),
+    PRIMARY KEY (operation_id, item_id)
+  );
+
+  -- Fixed / probabilistic outputs: EXPECTED units per execution as an exact
+  -- fraction (a guaranteed 3 is 3/1, a 1-in-5 proc is 1/5).
+  CREATE TABLE operation_outputs (
+    operation_id INTEGER NOT NULL REFERENCES operations (operation_id) ON DELETE CASCADE,
+    item_id      INTEGER NOT NULL CHECK (item_id > 0),
+    exp_num      INTEGER NOT NULL CHECK (exp_num > 0),
+    exp_den      INTEGER NOT NULL CHECK (exp_den > 0),
+    PRIMARY KEY (operation_id, item_id)
+  );
+
+  -- Alternative to operation_outputs: outputs are not stored but derived, at
+  -- resolve time, from the recorded prospecting batches of this ore.
+  CREATE TABLE operation_empirical_source (
+    operation_id INTEGER PRIMARY KEY REFERENCES operations (operation_id) ON DELETE CASCADE,
+    ore_item_id  INTEGER NOT NULL CHECK (ore_item_id > 0),
+    patch        TEXT
+  );
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
