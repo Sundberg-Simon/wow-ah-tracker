@@ -7,3 +7,10 @@ dist/
 /.claude/
 /reports-private/
 /config/earningsAccounts.local.json
+
+# Crafting optimizer (CLAUDE.md #16): the player's own empirical data, local only.
+/data-private/
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+*.db

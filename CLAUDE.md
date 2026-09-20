@@ -516,6 +516,72 @@ eftersom.]
         som lokal commit tills Simon säger till; addonet fungerar utan den via
         fallback-listan.
 
+16. **WoW Crafting Optimizer — egen modul i samma repo, egen lokal SQLite,
+    byggs bottom-up (påbörjad 2026-09-20).** Beräknar billigaste sättet att
+    producera crafted items (BUY / CRAFT / PROSPECT / transmute, rekursivt,
+    med förklarande beslutsträd) utanför spelet. Detta är den UTTRYCKLIGA
+    undantaget från "Neon Postgres" i teknikstacken — inte ett skäl att slå
+    ihop databaserna eller att flytta något av synken hit.
+    - **Plats**: `src/crafting/` (motor + datamodell + tester), CLI i
+      `scripts/crafting.ts` (`npm run crafting -- ...`), tester med
+      `npm run test:crafting` (node:test via tsx, inga nya dependencies).
+      TypeScript/Node, INTE Python. Ingen Lua/addon-del, varken nu eller
+      initialt.
+    - **Databas**: `node:sqlite` (inbyggd, Node ≥ 22.13 — lokalt körs 24; CI
+      kör Node 20 men rör aldrig modulen, så `npm ci` påverkas inte). Filen
+      ligger i `data-private/crafting.sqlite` (gitignorerad, likt #13:
+      Simons egna empiriska data, repot är publikt), override via
+      `CRAFTING_DB_PATH`. `src/crafting/**` får ALDRIG importera
+      `src/db/pool.ts` eller på annat sätt läsa/skriva Neon. Schemat
+      versioneras med `PRAGMA user_version` + en append-only migrationslista
+      i `src/crafting/db.ts` (redigera aldrig en levererad migration). Delad
+      kod från synken (OAuth, connected-realm-upplösning) FÅR återanvändas —
+      den är publik och redan verifierad — men först när marknadslagret byggs.
+    - **Lager (ordning är bindande, verifiera varje lager innan nästa)**:
+      1 prospecting (KLART: batches → poolad observerad yield + expected
+      output), 2 transmutes/processing-operationer (generell
+      INPUT→OUTPUT-modell), 3 intermediates (BUY vs CRAFT rekursivt), 4
+      slutprodukter (enkel end-to-end-produkt → Panther mounts → Engineering
+      mounts → Vial of the Sands → övrigt). Marknadsdata
+      (`get_ah_price(item, realm)`) är fristående från trackedItems/synk/
+      health — punktuppslag on demand, inte historik.
+    - **Regler som redan är låsta i koden**: (a) valuta = heltals-koppar,
+      aldrig float; (b) yield = exakt reducerat bråk (`fraction.ts`), aldrig
+      lagrad — alltid omräknad från råa batch-rader; (c) yield är POOLAD
+      (total output / total ore), inte snitt av per-batch-rates, så en liten
+      batch aldrig väger lika mycket som en stor; (d) en batch är en KOMPLETT
+      post: ett item som inte anges räknas som 0 för den batchens ore
+      (annars blir yielden för hög); (e) `ore_count` är total ore som
+      förbrukats, inte antal casts — cast-storlek är speldata som hör till
+      lager 2; (f) item-id är nyckeln, namn är bara visning — samma namn kan
+      finnas under flera id (CLI vägrar tvetydiga namn); (g) ingen speldata
+      hårdkodas: vilken ore som ger vilka gems kommer enbart från inmatade
+      batcher; (h) `patch` är fritext-tagg med exakt matchning i filter.
+    - **Realm-scope (avgjort 2026-09-20)**: motorn jobbar på connected-realm-
+      nivå. De 81 relevanta klustren = de connected realms där Simons rostrade
+      karaktärer (`/waht realms` → `roster_characters`) finns — INTE en
+      handskriven lista och INTE en locale-filtrering. Verifierat mot Neon
+      2026-09-20: 81 rosterkaraktärer → 81 olika kluster, 0 med oupplöst
+      `connected_realm_id`, av 92 totalt. Datalagret får känna till alla 92.
+      Mekanismen som hämtar listan in i SQLite är ÖPPEN (fråga innan bygge):
+      en enkel read-only-export av kluster-ID:n är rimlig, men modulen får
+      inte skriva till Neon eller ha en löpande koppling dit. Rostern
+      växer/krymper (`/waht realms remove`) → talet 81 är ett ögonblick,
+      lita på rostern, inte på siffran.
+    - **Commodities prissätts EU-övergripande, inte per realm** (bekräftat av
+      Simon, se README) — realm-jämförelse av produktionskostnad ger bara
+      skillnad för icke-commodity-items.
+    - **Avgjorda frågor**: (1) prospecting-yield beror INTE på secondary
+      stats för de aktuella (gamla) craftsen → ingen stat-tagg behövs nu;
+      `patch` + `note` räcker. Gäller om det någonsin tillkommer
+      stat-beroende recept: ompröva då. (2) Items med olika kvalitetsnivå
+      (olika item-id) modelleras som SEPARATA recept när den dagen kommer —
+      mats är inte identiska mellan nivåerna, så ingen särskild logik för
+      "samma namn, olika nivå" behövs i receptmodellen.
+    - **Fortfarande öppet / måste verifieras innan lager 2+** (hitta inte
+      på): cast-storlek och de verkliga recepten/transmutes/yields — fråga
+      Simon, hitta aldrig på speldata.
+
 ## Vad som är byggt och verifierat hittills
 - **Milestone 1**: OAuth-token, connected-realm-upplösning, per-realm-
   och commodity-filtrering mot riktiga item-ID:n (128671, 72145 m.fl.) —
