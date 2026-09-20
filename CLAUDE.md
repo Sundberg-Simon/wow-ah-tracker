@@ -596,6 +596,77 @@ eftersom.]
       `/data/wow/search/item` behandlar flera ord som ELLER och sorterar på
       id, så en ordagrann fraskoll måste filtreras klientsidigt
       (`searchItemsByName` söker varje ord för sig och kräver alla).
+    - **Marknadslager + Crafting-flik (2026-09-20)**: tredje fliken "Crafting"
+      i `reports-private/earnings.html` (lokal, ALDRIG via Pages — samma regel
+      som #13; siffrorna är Simons egen analys). Kedjan: `craftingReport.ts`
+      (öppnar lokala SQLite, hämtar priser, räknar) → `profit.ts` (ekonomi) →
+      `flow.ts` (graf) → `flowHtml.ts` (HTML). `reportEarnings.ts` anropar det
+      via `loadCraftingTab()` och är ISOLERAD: fel (ingen DB, inga
+      Blizzard-uppgifter, nätverk nere) blir ett meddelande i fliken, fäller
+      aldrig resten av rapporten.
+      * **Flödesschema-beredskap**: fliken ritas ur en GRAF, inte direkt ur
+        siffrorna — item-noder + operationsnoder, kanter = flöden med
+        kvantitet och värde. Ett item som är en operations output och nästa
+        operations input är EN nod, så kedjor kopplas av sig själva;
+        `layerNodes()` ger kolumn per nod (kastar vid cykel). Ett riktigt
+        flödesschema senare = byt bara ritaren `flowHtml.ts`; nu ritas
+        kolumnerna som kort med pilar.
+      * **Prismodell** (`profit.ts`, medvetet enkel och utskriven i fliken):
+        INKÖP = gå uppför säljlistan från billigaste (verklig kostnad för N
+        st, inte bara första styckets pris); FÖRSÄLJNING = lägsta aktuella
+        listning minus AH-avgift = det OPTIMISTISKA fallet, eftersom stora
+        volymer pressar priset. Saknat pris (inget listat) → beloppet blir
+        OKÄNT (null), aldrig 0; samma princip som "UNKNOWN, not zero". Varje
+        vara visar sina enheter som % av allt som ligger listat (nära/över
+        100 % = priset håller inte); `thin`-flaggan = enheter > listat.
+        Inte modellerat: deposit (återbetalas vid sälj), säljtid,
+        undercutting, prisrörelse under försäljningen.
+      * **AH-avgift 5 %** (`AH_FEE_RATE`) är UPPMÄTT, inte antagen: 27 av 27 av
+        Simons egna sales hade `consignment` = exakt 5,00 % av försäljnings-
+        priset (2026-09-20). Kolla om om avgiften någonsin ändras.
+      * **Marknadsdata** (`market.ts`, fristående från synk/trackedItems/
+        health): commodities prissätts EU-övergripande; hela dumpen (~380k
+        rader, ~2,5 s) hämtas med en injicerad hämtare (`blizzardMarket.ts`
+        kopplar synkens OAuth-klient) och filtreras till efterfrågade items.
+        `market_snapshots` (insert-only, unik per item + dumpens
+        Last-Modified) ger offline-fallback och en prishistorik som växer av
+        sig själv. Bekräftat 2026-09-20: Kyparite och alla 13 gems finns i
+        commodity-dumpen.
+      * **Priserna är volatila**: Kyparite-priset per ore föll ~40 % på en
+        timme mellan två hämtningar och vinsten på en 3 000-ore-batch gick
+        från ungefär noll till tusentals guld. En ögonblicksbild räcker
+        alltså inte som beslutsunderlag — och breakeven-priset på ore
+        (visas i fliken) är det stabilare måttet.
+      * **Öppet / ej byggt**: trend/prishistorik i fliken, känslighet ("vinst
+        utan största posten"), en mer konservativ försäljningsmodell,
+        icke-commodity-items per realm, fler operationer i samma flöde.
+    - **Perspektiv: Simon är CRAFTARE (bekräftat 2026-09-20) — nästa modellsteg
+      är BUY vs PROSPECT per gem han behöver, inte "vinst på att sälja"**.
+      Han köper i större utsträckning än han säljer på den här typen av items,
+      så AH-avgiften är i det här skedet underordnad (den finns kvar i
+      `profit.ts` men är inte huvudmåttet). Frågan är: är det billigare att
+      köpa Kyparite och prospecta än att köpa gemsen direkt, och hur mycket?
+      * **Kärnproblemet är gemensamma produkter (joint products)**: en cast ger
+        ~13 olika gems på en gång, så "vad kostar en Sunstone via prospecting"
+        beror på vad man gör med resten. Två gränser, båda beräknade
+        2026-09-20 mot live-priser (engångsuträkning, ingen kod levererad):
+        (a) HELA ore-kostnaden på ett gem (biprodukter värda 0) = mycket dyrare
+        än att köpa direkt för nästan alla gems; (b) biprodukterna krediterade
+        till lägsta pris = "gratis" för nästan alla, och bara Sunstone blir
+        ett verkligt tal (≈ 10,7 g mot ≈ 30 g att köpa). Slutsats: prospecting
+        lönar sig för en craftare bara om man faktiskt använder/säljer HELA
+        utfallet; för ett enstaka gem är direkt-köp nästan alltid billigare,
+        med Sunstone som undantag.
+      * **Beslut som måste tas med Simon innan bygget (ÖPPET)**: hur
+        biprodukter ska värderas — (1) som besparing (du hade annars köpt dem
+        till lägsta pris, avgift irrelevant), (2) som försäljning (avgift,
+        undercut, tunn marknad spelar in), eller (3) användarvald policy per
+        gem ("behöver jag den / säljer jag den / ignorerar jag den"). Alla tre
+        ger olika svar; välj inte tyst. Krediteringen till lägsta pris är den
+        OPTIMISTISKA gränsen (tunna marknader, se Crafting-fliken).
+      * Passar redan i strukturen: `get_cheapest_cost(item)` = min(BUY,
+        PROSPECT-via-Kyparite, ...) med förklarande träd; en operation med
+        flera outputs behöver en explicit allokeringsregel (ovan).
     - **Realm-scope (avgjort 2026-09-20)**: motorn jobbar på connected-realm-
       nivå. De 81 relevanta klustren = de connected realms där Simons rostrade
       karaktärer (`/waht realms` → `roster_characters`) finns — INTE en

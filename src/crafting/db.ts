@@ -91,6 +91,19 @@ const MIGRATIONS: string[] = [
     patch        TEXT
   );
   `,
+  // v3: market price snapshots (insert-only history; see market.ts)
+  `
+  CREATE TABLE market_snapshots (
+    snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id     INTEGER NOT NULL CHECK (item_id > 0),
+    -- Blizzard's own Last-Modified of the dump, so re-running within one dump is a no-op
+    observed_at TEXT NOT NULL,
+    fetched_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    -- ask ladder as JSON [{price, quantity}, ...], one entry per distinct price, cheapest first
+    levels_json TEXT NOT NULL,
+    UNIQUE (item_id, observed_at)
+  );
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
