@@ -14,7 +14,9 @@
     "ingest": "tsx scripts/ingestSavedVariables.ts",
     "report:earnings": "tsx scripts/reportEarnings.ts",
     "rollup": "tsx scripts/rollupSnapshots.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "crafting": "tsx scripts/crafting.ts",
+    "test:crafting": "node --import tsx --test src/crafting/*.test.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
