@@ -1,27 +1,39 @@
 import { blizzardGet, blizzardGetWithMeta } from "../blizzard-api/client.js";
-import type { AuctionsResponse, CommoditiesResponse } from "../blizzard-api/types.js";
+import type { Auction, AuctionsResponse, CommoditiesResponse } from "../blizzard-api/types.js";
+import { classifyListing, type IlvlTable, type SnapshotSpec } from "./variants.js";
 
 export interface PriceObservation {
   itemId: number;
   /** null = region-wide commodity price, not tied to one realm */
   connectedRealmId: number | null;
+  /** Item level of the tracked variant (CLAUDE.md #17); null = the item is tracked as a whole. */
+  ilvl: number | null;
   minPrice: number;
   totalQuantity: number;
   listingCount: number;
 }
 
+interface Aggregate {
+  itemId: number;
+  ilvl: number | null;
+  minPrice: number;
+  totalQuantity: number;
+  listingCount: number;
+}
+
+/** One aggregate per item, or per item + item level for variant-tracked gear. */
 function aggregateByItem(
-  rows: { itemId: number; price: number; quantity: number }[],
-): Map<number, { minPrice: number; totalQuantity: number; listingCount: number }> {
-  const byItem = new Map<
-    number,
-    { minPrice: number; totalQuantity: number; listingCount: number }
-  >();
+  rows: { itemId: number; ilvl: number | null; price: number; quantity: number }[],
+): Aggregate[] {
+  const bySeries = new Map<string, Aggregate>();
 
   for (const row of rows) {
-    const existing = byItem.get(row.itemId);
+    const key = `${row.itemId}:${row.ilvl ?? ""}`;
+    const existing = bySeries.get(key);
     if (!existing) {
-      byItem.set(row.itemId, {
+      bySeries.set(key, {
+        itemId: row.itemId,
+        ilvl: row.ilvl,
         minPrice: row.price,
         totalQuantity: row.quantity,
         listingCount: 1,
@@ -33,7 +45,30 @@ function aggregateByItem(
     }
   }
 
-  return byItem;
+  return [...bySeries.values()];
+}
+
+/**
+ * Reduces one realm's itemized auctions to the tracked series: listings of
+ * tracked items (for variant-tracked gear, only at a tracked item level),
+ * priced PER UNIT. Pure - split out of the fetch so it can be tested offline.
+ */
+export function aggregateRealmAuctions(
+  auctions: readonly Auction[],
+  spec: SnapshotSpec,
+  table: IlvlTable,
+): Omit<PriceObservation, "connectedRealmId">[] {
+  const matching: { itemId: number; ilvl: number | null; price: number; quantity: number }[] = [];
+  for (const a of auctions) {
+    if (typeof a.buyout !== "number" || !(a.quantity > 0)) continue;
+    const c = classifyListing(a.item.id, a.item.bonus_lists, spec, table);
+    if (!c.tracked) continue;
+    // buyout is the price for the whole listing (stack), not per unit - store
+    // per-unit so stacks of different sizes are comparable to each other and
+    // to commodities' unit_price.
+    matching.push({ itemId: a.item.id, ilvl: c.ilvl, price: Math.floor(a.buyout / a.quantity), quantity: a.quantity });
+  }
+  return aggregateByItem(matching);
 }
 
 /**
@@ -44,7 +79,8 @@ function aggregateByItem(
  */
 export async function fetchTrackedAuctionsForRealm(
   connectedRealmId: number,
-  trackedItemIds: Set<number>,
+  spec: SnapshotSpec,
+  ilvlTable: IlvlTable,
 ): Promise<PriceObservation[]> {
   const data = await blizzardGet<AuctionsResponse>(
     `/data/wow/connected-realm/${connectedRealmId}/auctions`,
@@ -59,24 +95,7 @@ export async function fetchTrackedAuctionsForRealm(
     throw new Error(`Connected realm ${connectedRealmId} returned an empty auction dump`);
   }
 
-  const matching = data.auctions
-    .filter((a) => trackedItemIds.has(a.item.id) && typeof a.buyout === "number" && a.quantity > 0)
-    // buyout is the price for the whole listing (stack), not per unit - store
-    // per-unit so stacks of different sizes are comparable to each other and
-    // to commodities' unit_price.
-    .map((a) => ({
-      itemId: a.item.id,
-      price: Math.floor((a.buyout as number) / a.quantity),
-      quantity: a.quantity,
-    }));
-
-  const aggregated = aggregateByItem(matching);
-
-  return [...aggregated.entries()].map(([itemId, agg]) => ({
-    itemId,
-    connectedRealmId,
-    ...agg,
-  }));
+  return aggregateRealmAuctions(data.auctions, spec, ilvlTable).map((agg) => ({ ...agg, connectedRealmId }));
 }
 
 /**
@@ -96,15 +115,10 @@ export async function fetchTrackedCommodities(
 
   const matching = data.auctions
     .filter((c) => trackedItemIds.has(c.item.id))
-    .map((c) => ({ itemId: c.item.id, price: c.unit_price, quantity: c.quantity }));
+    .map((c) => ({ itemId: c.item.id, ilvl: null, price: c.unit_price, quantity: c.quantity }));
 
-  const aggregated = aggregateByItem(matching);
-
-  const observations = [...aggregated.entries()].map(([itemId, agg]) => ({
-    itemId,
-    connectedRealmId: null,
-    ...agg,
-  }));
+  // Commodities are never gear, so there is no item-level variant to tell apart.
+  const observations = aggregateByItem(matching).map((agg) => ({ ...agg, connectedRealmId: null }));
 
   return { observations, lastModified };
 }

@@ -65,22 +65,29 @@ local function sortedItemIds(items)
 	return ids
 end
 
--- One "EU min ..., median ... | your realm: ..." line for a single item.
-local function buildItemLine(itemId, item, myConnectedRealmId)
+-- One "EU min ..., median ... | your realm: ..." line for a single item, or for
+-- one item-level variant of it (CLAUDE.md #17): then `prices` is that
+-- variant's price table (same fields as an item's own) and `ilvl` labels it.
+local function buildItemLine(itemId, item, myConnectedRealmId, prices, ilvl)
+	prices = prices or item
+	local name = item.name or ("item " .. tostring(itemId))
+	if ilvl then
+		name = string.format("%s [ilvl %d]", name, ilvl)
+	end
 	local line = string.format(
 		"%s: EU min %s, median %s",
-		item.name or ("item " .. tostring(itemId)),
-		copperToGoldString(item.euMinCopper),
-		copperToGoldString(item.euMedianCopper)
+		name,
+		copperToGoldString(prices.euMinCopper),
+		copperToGoldString(prices.euMedianCopper)
 	)
 
-	local myRow = findMyRealmRow(item, myConnectedRealmId)
+	local myRow = findMyRealmRow(prices, myConnectedRealmId)
 	if myRow then
 		local compareText
-		if item.euMinCopper and myRow.minPriceCopper <= item.euMinCopper then
+		if prices.euMinCopper and myRow.minPriceCopper <= prices.euMinCopper then
 			compareText = "at or below EU min"
-		elseif item.euMinCopper then
-			compareText = copperToGoldString(myRow.minPriceCopper - item.euMinCopper) .. " above EU min"
+		elseif prices.euMinCopper then
+			compareText = copperToGoldString(myRow.minPriceCopper - prices.euMinCopper) .. " above EU min"
 		else
 			compareText = "no EU min to compare against"
 		end
@@ -137,7 +144,17 @@ local function buildSummaryLines()
 		if item.category == "permanent" then
 			salesOnlyCount = salesOnlyCount + 1
 		else
-			table.insert(lines, buildItemLine(itemId, item, myConnectedRealmId))
+			if item.variants then
+				-- Variant-tracked gear: one line per tracked item level, never a blended one.
+				for _, ilvl in ipairs(sortedItemIds(item.variants)) do
+					table.insert(
+						lines,
+						buildItemLine(itemId, item, myConnectedRealmId, item.variants[ilvl], tonumber(ilvl))
+					)
+				end
+			else
+				table.insert(lines, buildItemLine(itemId, item, myConnectedRealmId))
+			end
 		end
 	end
 

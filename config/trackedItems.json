@@ -108,5 +108,8 @@
   { "id": 7961, "name": "Phantom Blade", "category": "permanent", "active": true },
   { "id": 201378, "name": "Tuskarr Angler's Crossbow", "category": "permanent", "active": true },
   { "id": 65891, "name": "Vial of the Sands", "category": "permanent", "active": true, "crafted": true, "est_cost_per_unit": null },
-  { "id": 95416, "name": "Sky Golem", "category": "permanent", "active": true, "crafted": true, "est_cost_per_unit": null }
+  { "id": 95416, "name": "Sky Golem", "category": "permanent", "active": true, "crafted": true, "est_cost_per_unit": null },
+  { "id": 271441, "name": "Crushing Coiler Coif", "category": "patch-specific", "active": true, "variants": [308, 311] },
+  { "id": 271440, "name": "Greaves of the Noxious Depths", "category": "patch-specific", "active": true, "variants": [308, 311] },
+  { "id": 271435, "name": "Slippers of the Hissing Cult", "category": "patch-specific", "active": true, "variants": [308] }
 ]

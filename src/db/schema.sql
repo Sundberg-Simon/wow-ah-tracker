@@ -62,8 +62,18 @@ ALTER TABLE sync_runs
 -- True idempotency key: one observation per item per realm per run.
 -- COALESCE because connected_realm_id is NULL for commodities and Postgres
 -- treats NULLs as distinct in plain UNIQUE constraints. 0 is never a real id.
-CREATE UNIQUE INDEX IF NOT EXISTS price_snapshots_run_item_realm_uidx
-  ON price_snapshots (sync_run_id, item_id, COALESCE(connected_realm_id, 0));
+-- Item-level variants (CLAUDE.md #17): patch-specific gear is tracked per item
+-- level, so one item can have several rows per realm per run - one per level.
+-- NULL = the item is tracked as a whole (everything before this column, and
+-- every non-gear item), so existing rows keep their meaning.
+ALTER TABLE price_snapshots ADD COLUMN IF NOT EXISTS ilvl INTEGER;
+
+-- The old key (run, item, realm) would forbid a second variant of the same
+-- item; the new one adds ilvl. Compatible with code that predates the column:
+-- it writes ilvl NULL -> 0, i.e. exactly the old key.
+DROP INDEX IF EXISTS price_snapshots_run_item_realm_uidx;
+CREATE UNIQUE INDEX IF NOT EXISTS price_snapshots_run_item_realm_ilvl_uidx
+  ON price_snapshots (sync_run_id, item_id, COALESCE(ilvl, 0), COALESCE(connected_realm_id, 0));
 
 ALTER TABLE connected_realms
   ADD COLUMN IF NOT EXISTS first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -221,10 +231,15 @@ CREATE TABLE IF NOT EXISTS price_snapshots_rollup (
   rolled_up_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- COALESCE for the same reason as price_snapshots_run_item_realm_uidx:
--- connected_realm_id is NULL for commodities.
-CREATE UNIQUE INDEX IF NOT EXISTS price_snapshots_rollup_uidx
-  ON price_snapshots_rollup (item_id, COALESCE(connected_realm_id, 0), bucket_start, bucket_days);
+-- Item level of a variant-tracked series (see price_snapshots.ilvl); NULL for
+-- everything else. Rolled up per level so variants are never averaged together.
+ALTER TABLE price_snapshots_rollup ADD COLUMN IF NOT EXISTS ilvl INTEGER;
+
+-- COALESCE for the same reason as the price_snapshots unique index:
+-- connected_realm_id and ilvl are NULL for commodities / whole-item series.
+DROP INDEX IF EXISTS price_snapshots_rollup_uidx;
+CREATE UNIQUE INDEX IF NOT EXISTS price_snapshots_rollup_ilvl_uidx
+  ON price_snapshots_rollup (item_id, COALESCE(ilvl, 0), COALESCE(connected_realm_id, 0), bucket_start, bucket_days);
 
 -- Crafted-item stock snapshots from the addon (Stock.lua, CLAUDE.md #15), for
 -- the local earnings report's stock section. Personal data, like earnings:

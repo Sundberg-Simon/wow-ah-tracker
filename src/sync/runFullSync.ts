@@ -1,6 +1,7 @@
 import type pg from "pg";
 import { pool } from "../db/pool.js";
-import { getSnapshotTrackedItemIds } from "../../config/trackedItems.js";
+import { getSnapshotSpec, getSnapshotTrackedItems, ilvlBonusIds } from "../../config/trackedItems.js";
+import { unmappedVariants } from "./variants.js";
 import { fetchConnectedRealm, fetchConnectedRealmIds } from "./connectedRealms.js";
 import { recordPopulationChanges } from "./populationHistory.js";
 import {
@@ -163,7 +164,7 @@ async function commitRun(
       const chunk = all.slice(start, start + CHUNK);
       const values: unknown[] = [];
       const tuples = chunk.map((obs, i) => {
-        const b = i * 7;
+        const b = i * 8;
         values.push(
           runId,
           obs.itemId,
@@ -172,13 +173,14 @@ async function commitRun(
           obs.minPrice,
           obs.totalQuantity,
           obs.listingCount,
+          obs.ilvl,
         );
-        return `($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}, $${b + 5}, $${b + 6}, $${b + 7})`;
+        return `($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}, $${b + 5}, $${b + 6}, $${b + 7}, $${b + 8})`;
       });
       await client.query(
         `INSERT INTO price_snapshots
            (sync_run_id, item_id, connected_realm_id, captured_at,
-            min_price_copper, quantity, listing_count)
+            min_price_copper, quantity, listing_count, ilvl)
          VALUES ${tuples.join(", ")}
          ON CONFLICT DO NOTHING`,
         values,
@@ -290,8 +292,8 @@ export async function runFullSync(force = false): Promise<void> {
   // Only patch-specific items get auction snapshots (CLAUDE.md #14). With none
   // configured, skip every auction call and write no price rows - the job
   // degrades to an occasional realm-metadata refresh instead.
-  const trackedIds = new Set(getSnapshotTrackedItemIds());
-  if (trackedIds.size === 0) {
+  const spec = getSnapshotSpec();
+  if (spec.size === 0) {
     await refreshRealmMetadataOnly(now, force);
     return;
   }
@@ -313,6 +315,13 @@ export async function runFullSync(force = false): Promise<void> {
     console.log(`::warning::Gap of ${gapMinutes}min since last successful sync - dropped ticks or an outage.`);
   }
 
+  // A variant item level no bonus id can produce is never collected - say so in the run log.
+  for (const u of unmappedVariants(getSnapshotTrackedItems(), ilvlBonusIds)) {
+    console.log(
+      `::warning::${u.name} (${u.id}): item level ${u.ilvl} has no bonus id in config/ilvlBonusIds.json, so nothing is collected for it.`,
+    );
+  }
+
   const runId = await startSyncRun(now, gapMinutes);
   const failedRealmIds: number[] = [];
 
@@ -320,7 +329,7 @@ export async function runFullSync(force = false): Promise<void> {
     const connectedRealmIds = await fetchConnectedRealmIds();
     console.log(`Resolved ${connectedRealmIds.length} EU connected-realm groups.`);
 
-    const commodities = await fetchTrackedCommodities(trackedIds);
+    const commodities = await fetchTrackedCommodities(new Set(spec.keys()));
 
     const realmResults = await mapWithConcurrency(connectedRealmIds, REALM_CONCURRENCY, async (id) => {
       try {
@@ -328,7 +337,7 @@ export async function runFullSync(force = false): Promise<void> {
         if (realm.connectedRealmId !== id) {
           throw new Error(`Index said ${id} but detail endpoint returned ${realm.connectedRealmId}`);
         }
-        const observations = await fetchTrackedAuctionsForRealm(id, trackedIds);
+        const observations = await fetchTrackedAuctionsForRealm(id, spec, ilvlBonusIds);
         return {
           connectedRealmId: id,
           realmNames: realm.realms.map((r) => r.name),

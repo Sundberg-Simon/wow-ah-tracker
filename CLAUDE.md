@@ -966,8 +966,8 @@ eftersom.]
       transmutes som ska in först och deras input/output/sannolikheter —
       fråga Simon, hitta aldrig på speldata.
 
-17. **Patch-specifik gear spåras per ilvl, inte per bas-id (pågår, steg 1
-    av 2).** Bakgrund 2026-09-21: samma bas-item (t.ex. Crushing Coiler
+17. **Patch-specifik gear spåras per ilvl, inte per bas-id (steg 1 och 2
+    byggda; CI-verifiering kvar).** Bakgrund 2026-09-21: samma bas-item (t.ex. Crushing Coiler
     Coif, 271441) säljs i många varianter under SAMMA item-id, och
     varianterna prissätts mycket olika (heroic-stegen 12841/12842/12843:
     ~25 900 / ~31 000 / ~60 000 g). Simon bryr sig bara om **item level**,
@@ -997,12 +997,52 @@ eftersom.]
       en `# Bags`-sektion med ALLA väskitems (antal + `staged=`) så de kan
       jämföras mot `config/trackedItems.json` (den lista synken använder).
       Testat i Lua-interpretator (34 kontroller); saknar spelverifiering.
-    - **Steg 2 (ej påbörjat, fråga Simon först)**: `variants` i
-      trackedItems.json, synk-matchning mot en trimmad kärn-mängd av
-      bonus-id:n ("innehåller alla", mest specifik vinner), nullable
-      variantkolumn via bakåtkompatibel migrering, per-variant rapport/
-      `data.lua`. Körs sedan med "första patch-specifika itemet"-
-      verifieringen ovan.
+    - **Steg 2 (byggt 2026-09-21, verifierat LOKALT mot skarp DB, EJ i CI)**:
+      * **Designändring mot första utkastet**: i stället för att matcha på en
+        "kärn-mängd" av bonus-id:n per variant används en liten global tabell
+        `config/ilvlBonusIds.json` (upgrade-steg-id → item level). Skäl: Simons
+        exporter visade att samma steg-id ger samma ilvl på flera olika items
+        (12842 → 308 och 12843 → 311 på tre olika gear-items), medan
+        stat-roll-id:n fluktuerar (42 mot 6652 för SAMMA ilvl) — en per-variant
+        id-mängd hade fragmenterats. Alla andra id:n i `bonus_lists` ignoreras.
+        ANTAGANDE (3 items bekräftar, fler ej kollat): upgrade-steg-id är
+        absoluta per säsong, inte relativa till itemets bas-ilvl. Ser ett
+        item konstigt prissatt ut, kolla det först.
+      * `trackedItems.json`: `variants: [308, 311]` (item levels) på ett
+        patch-specifikt item. Saknas/tomt = hela itemet som EN serie som
+        förut. Ett variant-item räknar BARA listningar på angivna nivåer.
+        **Ny nivå ⇒ ny rad i `ilvlBonusIds.json`** — Categorizerns export
+        visar `ilvl=` bredvid `bonus=`, så steg-id:t syns direkt. Saknas id:t
+        samlas inget in för nivån, och synken varnar (`::warning::`) i loggen
+        i stället för att tyst tappa det. Motsägande id:n (två olika nivåer i
+        samma listning) ⇒ listningen släpps, aldrig gissad.
+      * **Kod**: `src/sync/variants.ts` (rena funktioner: `resolveIlvl`,
+        `classifyListing`, `buildSnapshotSpec`, `unmappedVariants`),
+        `auctions.ts` (`aggregateRealmAuctions`, aggregerar per item+ilvl),
+        `runFullSync.ts` (skriver `ilvl`), tester `npm run test:sync`.
+      * **DB**: `price_snapshots.ilvl INTEGER NULL` (NULL = hela itemet; alla
+        gamla rader). Unik nyckel byttes till (run, item, `COALESCE(ilvl,0)`,
+        realm) — samma som förut för kod som skriver NULL, så gammal och ny
+        kod kan köra parallellt under en utrullning. Samma kolumn i
+        `price_snapshots_rollup` (rollup grupperar per ilvl så varianter aldrig
+        medelvärdesbildas ihop). `history.ts`: `ilvl`-filter (undefined = alla
+        rader, null = bara hela-item-rader, tal = den nivån). Synken kör
+        schema.sql vid varje tick, så migreringen sker av sig själv i CI; den
+        är även körd manuellt mot Neon.
+      * **Yta**: rapporten visar en sektion per nivå ("… [ilvl 308]").
+        `data.lua`: ett variant-item har INGA priser på toppnivå (de skulle
+        blandas) utan `variants = { [308] = {capturedAt, euMinCopper, …,
+        realms}, … }`; addonets inloggningssammanfattning skriver en rad per
+        nivå; Categorizerns seed lägger in en stagad post per nivå (aldrig en
+        bas-post, som skulle täcka alla ilvl och gömma bag-raderna).
+      * **Verifierat lokalt 2026-09-21**: 7 tester; en forcerad live-sync
+        (run 77, 92/92 realmer, 397 rader) gav fem serier (271441 ×308/311,
+        271440 ×308/311, 271435 ×308) med rimliga, klart åtskilda priser;
+        genererad `data.lua` + addonets seed och sammanfattning körda i
+        Lua-interpretator (16 kontroller). **Kvar**: pusha, kör den forcerade
+        CI-verifieringen (se "Första gången ett patch-specifikt item läggs
+        till" nedan — nu aktuell: 3 patch-items finns), samt Simons
+        spelverifiering av sammanfattningsraderna.
 
 ## Vad som är byggt och verifierat hittills
 - **Milestone 1**: OAuth-token, connected-realm-upplösning, per-realm-
