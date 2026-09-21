@@ -496,6 +496,48 @@ describe("craftingTabHtml", () => {
     assert.match(html, /stays worth it until Test Ore costs about/);
   });
 
+  it("shows an operation outside the chain as a sourcing tree, not as an arbitrary-size summary row", async () => {
+    const RAW = 8001;
+    const BAR = 8002;
+    const { db } = prospectFixture();
+    for (const [id, name] of [[ORE, "Test Ore"], [GEM_A, "Gem A"], [GEM_B, "Gem B"], [3010, "Lotus"], [RAW, "Raw"], [BAR, "Bar"]] as const) setItemName(db, id, name);
+    for (const id of [GEM_A, GEM_B, BAR]) setPolicy(db, id, "need");
+    const t = addOperation(db, { kind: "transmute", name: "Transmute A to B", inputs: [{ itemId: GEM_A, quantity: 1 }, { itemId: 3010, quantity: 1 }], fromRuns: {} });
+    addOperationRun(db, { operationId: t, executions: 10, outputs: [{ itemId: GEM_B, quantity: 12 }], performedOn: "2026-09-21" });
+    addOperation(db, { kind: "craft", name: "Smelt Thing", inputs: [{ itemId: RAW, quantity: 2 }], outputs: [{ itemId: BAR, expected: fraction(1, 1) }] });
+    addOperation(db, { kind: "transmute", name: "Waiting T", inputs: [{ itemId: BAR, quantity: 3 }], fromRuns: {} });
+    const dumpWithBars = async (): Promise<CommodityDump> => ({
+      lastModified: new Date(T0),
+      auctions: [
+        { item: { id: ORE }, quantity: 20, unit_price: 100 },
+        { item: { id: ORE }, quantity: 100, unit_price: 200 },
+        { item: { id: GEM_A }, quantity: 99, unit_price: 1_500 },
+        { item: { id: GEM_B }, quantity: 50, unit_price: 10_000 },
+        { item: { id: 3010 }, quantity: 99, unit_price: 500 },
+        { item: { id: RAW }, quantity: 9_999, unit_price: 100 },
+        { item: { id: BAR }, quantity: 9_999, unit_price: 250 },
+      ],
+    });
+    const html = craftingTabHtml(await buildCraftingModel({ db, fetchDump: dumpWithBars, executions: 10, now: new Date(T0) }));
+
+    const summary = html.match(/<table class="craft-summary">[\s\S]*?<\/table>/)![0];
+    assert.ok(summary.includes("Prospect Test Ore") && summary.includes("Transmute A to B"), "the chain's operations are in the summary");
+    assert.ok(!summary.includes("Smelt Thing"), "an operation outside the chain is not given an arbitrary size in the summary");
+
+    // 100 Bar: buy 100 x 250 = 2.50g, or smelt 100 times = 200 Raw x 100 = 2.00g (0.02g each)
+    assert.match(html, /Sourcing: buy it or make it/);
+    assert.match(html, /100 x Bar<\/strong>: craft via Smelt Thing \(100 times\) = <strong>2\.00g<\/strong>/);
+    assert.match(html, /instead of: buy 2\.50g/);
+    assert.match(html, /200 x Raw<\/strong>: buy on the auction house = <strong>2\.00g<\/strong>/);
+    assert.match(html, /Not considered, because they have no logged data yet.*Waiting T/);
+    assert.ok(!/<h4>[\d,.]+ x Gem B<\/h4>/.test(html), "items the chain makes are not repeated as sourcing trees");
+  });
+
+  it("has no sourcing section when every needed item is made by the shown operations", async () => {
+    const html = craftingTabHtml(await model(dump, [[GEM_A, "need"], [GEM_B, "ignore"]]));
+    assert.ok(!/Sourcing: buy it or make it/.test(html));
+  });
+
   it("has no chain section when there is no second operation with data", async () => {
     const html = craftingTabHtml(await model(dump, [[GEM_A, "need"], [GEM_B, "ignore"]]));
     assert.ok(!/The whole chain/.test(html));

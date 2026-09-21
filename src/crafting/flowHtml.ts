@@ -3,6 +3,7 @@ import { layerNodes, type FlowEdge, type FlowNode, type ItemNode, type Operation
 import type { CraftingTabModel } from "./craftingReport.js";
 import { formatGold } from "./money.js";
 import type { ResolvedOperation } from "./operations.js";
+import { unitCostOf, type ProcureNode } from "./procure.js";
 import type { GemSourcing, SourcingAnalysis } from "./sourcing.js";
 
 // HTML for the earnings report's "Crafting" tab. Pure string building over a
@@ -45,6 +46,8 @@ export const CRAFTING_CSS = `
   .badge.sell { background: #3b82f633; color: #1d4ed8; }
   .badge.ignore { background: #88888833; color: #666; }
   table.gems td.gem-name { font-weight: 600; }
+  ul.procure, ul.procure ul { list-style: none; padding-left: 1.2rem; margin: 0.2rem 0; }
+  ul.procure li { margin: 0.35rem 0; }
   .chain-tables { display: flex; flex-wrap: wrap; gap: 1.5rem; }
   .chain-tables > div { flex: 1 1 320px; }
 `;
@@ -170,7 +173,7 @@ function waitingSection(model: CraftingTabModel): string {
 }
 
 function summaryTable(model: CraftingTabModel): string {
-  const ready = model.sourcing.filter(isReady);
+  const ready = model.sourcing.filter((s) => isReady(s) && model.shownOperationIds.has(s.economics.operation.operationId));
   if (ready.length === 0) return "";
   const rows = ready
     .map((s) => {
@@ -214,7 +217,7 @@ function gemRow(g: GemSourcing, totalCredit: number | null, nameOf: (id: number)
 
 function gemTable(model: CraftingTabModel, nameOf: (id: number) => string): string {
   return model.sourcing
-    .filter((s) => s.gems.length > 0)
+    .filter((s) => s.gems.length > 0 && model.shownOperationIds.has(s.economics.operation.operationId))
     .map((s) => {
       const rows = [...s.gems]
         .sort((a, b) => (b.credit ?? -1) - (a.credit ?? -1) || a.itemId - b.itemId)
@@ -230,6 +233,53 @@ function gemTable(model: CraftingTabModel, nameOf: (id: number) => string): stri
       );
     })
     .join("");
+}
+
+/** One node of a sourcing tree: the chosen source with its price, what the alternatives would have cost, then its inputs. */
+function procureNodeHtml(node: ProcureNode, nameOf: (id: number) => string): string {
+  const label = `${units(fractionToNumber(node.quantity))} x ${esc(nameOf(node.itemId))}`;
+  if (!node.chosen) {
+    const why = node.options.map((o) => `${esc(o.strategy === "BUY" ? "buy" : o.via)}: ${esc(o.note ?? "unknown")}`).join("; ");
+    return `<li><strong>${label}</strong>: <span class="warn">no way to source it</span> <span class="muted">(${why})</span></li>`;
+  }
+  const c = node.chosen;
+  const unit = unitCostOf(node);
+  const via = c.strategy === "BUY" ? "buy on the auction house" : `${c.strategy.toLowerCase()} via ${esc(c.via)}${c.executions ? ` (${units(fractionToNumber(c.executions))} times)` : ""}`;
+  const others = node.options
+    .filter((o) => o !== c)
+    .map((o) => `${o.strategy === "BUY" ? "buy" : esc(o.via)} ${o.cost === null ? `<em>${esc(o.note ?? "unknown")}</em>` : formatGold(o.cost)}`)
+    .join(" | ");
+  const kids = c.inputs.length > 0 ? `<ul>${c.inputs.map((i) => procureNodeHtml(i, nameOf)).join("")}</ul>` : "";
+  return (
+    `<li><strong>${label}</strong>: ${via} = <strong>${goldOrUnknown(node.cost)}</strong>${unit === null ? "" : ` <span class="muted">(${formatGold(unit)} each)</span>`}` +
+    `${others ? `<div class="muted">instead of: ${others}</div>` : ""}${kids}</li>`
+  );
+}
+
+/**
+ * Needed items the chain doesn't make: for each, the cheapest way to end up with a set number of them, where every
+ * input of every way of making it is again bought or made, whichever is cheaper, all the way down.
+ */
+function sourcingSection(model: CraftingTabModel): string {
+  if (model.procurements.length === 0) return "";
+  const nameOf = (id: number) => model.itemNames.get(id) ?? String(id);
+  const trees = model.procurements
+    .map((p) => `<h4>${units(p.units)} x ${esc(nameOf(p.itemId))}</h4><ul class="procure">${procureNodeHtml(p.result.root, nameOf)}</ul>`)
+    .join("");
+  const noData = [...new Set(model.procurements.flatMap((p) => p.result.noData))];
+  const excluded = model.procurements.flatMap((p) => p.result.excluded);
+  return (
+    `<h3>Sourcing: buy it or make it</h3>` +
+    `<p class="muted">For the items you need that the chain above doesn't make. Each is priced for ${units(model.procurements[0].units)} units, ` +
+    `choosing at every step between buying and making, and doing the same for every input of every way of making it, so a transmute uses a smelt's cost for its inputs whenever smelting is cheaper than buying.</p>` +
+    trees +
+    (noData.length > 0
+      ? `<p class="muted">Not considered, because they have no logged data yet and so nothing is known about what they yield: ${esc(noData.join(", "))}. They join as soon as you log results.</p>`
+      : "") +
+    (excluded.length > 0
+      ? `<p class="muted">Left out: ${esc([...new Set(excluded.map((e) => e.operation))].join(", "))} yields several things at once, so its cost per item depends on what the by-products are worth; the whole-chain view above covers it.</p>`
+      : "")
+  );
 }
 
 /**
@@ -346,6 +396,7 @@ export function craftingTabHtml(model: CraftingTabModel, now: Date = model.gener
   ${summaryTable(model)}
   ${flow ?`<div class="flow">${flow}</div>` : ""}
   ${gemTable(model, nameOfItem)}
+  ${sourcingSection(model)}
   ${waitingSection(model)}
   <ul class="notes">
     <li><strong>How it's counted.</strong> The inputs are bought by walking the auction house from the cheapest listing up, so the cost is what buying that many really costs. Every gem the operation yields is then worth something to <em>you</em>: a gem you <strong>need</strong> is worth what buying that many would cost (you no longer have to buy them; the AH cut doesn't matter), one you <strong>sell</strong> the lowest listed price minus the ${feePercent}% AH cut (measured on your own sales), one you <strong>ignore</strong> nothing. <em>Saving vs buying</em> = what the gems are worth minus what the inputs cost.</li>

@@ -14,7 +14,10 @@ import { craftingDbPath, openCraftingDb } from "../src/crafting/db.js";
 import { fetchItemName, searchItemsByName, type StaticGet } from "../src/crafting/itemLookup.js";
 import { fetchCommodityDump } from "../src/crafting/blizzardMarket.js";
 import { evaluateChain, formatChain } from "../src/crafting/chain.js";
-import { formatCheapestCost, getCheapestCost } from "../src/crafting/cheapest.js";
+import { getCheapestCost } from "../src/crafting/cheapest.js";
+import { fractionToNumber } from "../src/crafting/fraction.js";
+import { formatGold } from "../src/crafting/money.js";
+import { formatProcure, procure } from "../src/crafting/procure.js";
 import { DEFAULT_EXECUTIONS } from "../src/crafting/craftingReport.js";
 import { describeItem, getItemName, listItems, resolveItem, setItemName } from "../src/crafting/items.js";
 import { clearPolicy, getPolicies, POLICIES, setPolicy } from "../src/crafting/policy.js";
@@ -69,8 +72,9 @@ const USAGE = `WoW Crafting Optimizer - local data CLI (data-private/crafting.sq
   npm run crafting -- policy set <${POLICIES.join("|")}> <item> [<item> ...]
   npm run crafting -- policy list
   npm run crafting -- policy clear <item> [<item> ...]
-  npm run crafting -- cheapest <item> [--units N] [--executions N]   buy it, or run an operation that yields it? (with the reasoning;
-                                                         --units = how many you want, default 100; --executions sizes multi-output routes, default 600)
+  npm run crafting -- cheapest <item> [--units N] [--executions N]   cheapest way to end up with N of it (default 100): buy it or
+                                                         make it, and every input bought or made the same way, all the way down.
+                                                         --executions sizes prospecting-type routes (default 600), shown for information
   npm run crafting -- chain [--ore N] [--root <op>]      buy N of the root operation's input (default 3000), run it, then
                                                          every other operation on what you hold: what does it cost vs buying the result?
 
@@ -394,21 +398,28 @@ async function main(): Promise<void> {
       }
       const prices = await loadPrices(db, fetchCommodityDump, ids);
       const policies = getPolicies(db, ids);
-      // A route that yields ONLY the wanted item is sized to give about --units of it (default 100), so it is compared
-      // with buying a realistic number of units. Routes that yield many things at once (prospecting) can't be sized
-      // per item, so they use a real batch (--executions, default 600).
       const wantedUnits = values.units ? parseCount("--units", values.units) : 100;
-      const analyses = operations.map((op) => {
-        const yielded = op.outputs.find((o) => o.itemId === target);
-        const single = op.outputs.length === 1 && yielded !== undefined;
-        const runs = single ? Math.max(1, Math.ceil(wantedUnits / (yielded.expected.num / yielded.expected.den))) : executions;
-        return analyzeSourcing(computeEconomics(op, prices.books, { executions: runs }), prices.books, policies);
-      });
+      const nameOf = (id: number) => getItemName(db, id) ?? String(id);
       const source = prices.source === "live" ? `live (Blizzard dump ${prices.observedNewest})` : `${prices.source}${prices.observedOldest ? ` (dump ${prices.observedOldest})` : ""}`;
-      console.log(`Prices: ${source}. Routes that yield only this item are sized for about ${wantedUnits} units; multi-output routes (prospecting) for ${executions} executions.`);
+      console.log(`Prices: ${source}.`);
       if (prices.error) console.warn(`  ${prices.error}`);
       console.log("");
-      console.log(formatCheapestCost(getCheapestCost({ itemId: target, analyses, books: prices.books, nameOf: (id) => getItemName(db, id) ?? String(id) })));
+      // The answer: every input of every way of making the item is itself sourced the cheapest way (buy it or make
+      // it), all the way down - so a transmute automatically uses a smelt's cost for its inputs when that is cheaper.
+      console.log(`Cheapest way to end up with ${wantedUnits.toLocaleString("en-US")} x ${nameOf(target)}, sourcing every input the cheapest way too:`);
+      console.log(formatProcure(procure({ itemId: target, quantity: wantedUnits, operations, books: prices.books }), nameOf));
+      // Multi-output routes (prospecting) have no per-item price until you say what the by-products are worth: information only.
+      const analyses = operations.map((op) => analyzeSourcing(computeEconomics(op, prices.books, { executions }), prices.books, policies));
+      const joint = getCheapestCost({ itemId: target, analyses, books: prices.books, nameOf }).routes.filter((r) => r.joint);
+      if (joint.length > 0) {
+        console.log("");
+        console.log(`Joint-product routes (information only, sized for ${executions} executions; "chain" is the honest whole-chain comparison):`);
+        for (const r of joint) {
+          const own = r.unitCost === null ? "unknown" : r.unitCost <= 0 ? "free (the by-products more than cover the inputs)" : `${formatGold(r.unitCost)} each`;
+          const buy = r.buyUnitCost === null ? "unknown" : `${formatGold(r.buyUnitCost)} each`;
+          console.log(`  ${r.strategy} via ${r.via}: ${own}, against ${buy} to buy the same ${fractionToNumber(r.units).toLocaleString("en-US", { maximumFractionDigits: 1 })} units`);
+        }
+      }
     } else if (group === "backup" && action === "create") {
       printBackup(createBackup(db, backupConfig()));
     } else {

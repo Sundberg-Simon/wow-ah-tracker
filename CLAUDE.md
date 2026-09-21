@@ -719,6 +719,66 @@ eftersom.]
         faktiskt ger, och en transmutes input-kostnad för Sunstone borde vara
         min(köp, prospect) — det är lager 3 (rekursivt BUY vs CRAFT vs
         PROSPECT), inte byggt än.
+    - **Living Steel-kedjan och rekursiv sourcing (2026-09-21, byggt)**: en
+      kedja i tre led där Trillium Bar har flera konkurrerande vägar innan
+      Living Steel ens kommer in.
+      * **Verifierat mot Blizzards API 2026-09-21** (skannat: Pandaria Mining,
+        Alchemy, Blacksmithing, Engineering, Jewelcrafting; strukturerade
+        reagens). Item: Ghost Iron Ore 72092, Ghost Iron Bar 72096, Black
+        Trillium Ore 72094, White Trillium Ore 72103, Trillium Bar 72095,
+        Spirit of Harmony 76061, Living Steel 72104. Recept: `Smelt Ghost Iron`
+        (24591) 2 ore → 1 bar; `Smelt Trillium` (24589) 2 Black + 2 White → 1
+        Trillium Bar; `Transmute: Trillium Bar` (26020) 10 Ghost Iron Bar → 1;
+        `Riddle of Steel` (27385) 3 Trillium Bar + 3 Spirit of Harmony → 1
+        Living Steel. **Namnfälla**: receptet med Spirit of Harmony heter
+        "Riddle of Steel" i Blizzards data; det riktiga "Transmute: Living
+        Steel" (26017) är ett ANNAT recept, 6 Trillium Bar → 1 Living Steel
+        (inga Spirit), en tredje väg som MEDVETET INTE är uppsatt och inte ska
+        sättas upp: den har en daglig cooldown (Blizzards egen beskrivning:
+        "Transmutations of this magnitude can only be done once each day") och
+        går därför inte att lita på för mass-crafting. Riddle of Steel har ingen
+        (beskrivningen: att använda Spirits of Harmony "does not tax the
+        alchemist, allowing them to ignore the normal one day of rest") och är
+        det ENDA Living Steel-recept Simon vill använda — verifierat 2026-09-21
+        mot API:t; besluten är Simons. Operationen behåller därför namnet
+        "Riddle of Steel" (Blizzards eget, entydigt). Lägg inte till cooldown-
+        receptet som konkurrent i `procure`/`chain`.
+        Operationerna ligger under Blizzards receptnamn i Simons lokala DB
+        (#6–#9); transmutes med `--from-runs` (yield okänd tills loggad,
+        nominellt 1 enligt API:t), smältorna som `craft` med fast utfall.
+      * **Policy**: `need` på Ghost Iron Bar, Trillium Bar och Living Steel.
+        För mellanprodukter påverkar policyn bara hur ÖVERBLIVNA enheter
+        värderas i `chain` (procure använder ingen policy): `need` = vad det
+        skulle kosta att köpa dem, vilket är rimligt bara om Simon faktiskt
+        skulle använda dem; annars är `sell` (netto efter AH-avgift) ärligare.
+      * **`procure.ts` (rekursiv sourcing)**: billigaste sättet att få N st av ett
+        item när VARJE input i varje väg åter kan köpas ELLER tillverkas, hela
+        vägen ner (t.ex. en transmute använder automatiskt en smälts kostnad
+        för sina inputs när det är billigare än att köpa). Varje nod prissätts
+        på den mängd den faktiskt behöver (att köpa mer går uppför säljlistan,
+        så tillverkning vinner i större skala); vid exakt lika vinner köp (inget
+        arbete). Avsiktliga förenklingar: EN källa per item (ingen "köp 40,
+        tillverka resten"); bara enkel-output-operationer deltar (multi-output
+        som prospecting saknar pris per item och hör till `chain`, listas som
+        "left out"); operation utan loggad data vet inte vad den ger, hoppas
+        över och namnges; cykler stoppas (ett item som är sin egen förfader kan
+        bara köpas). `cheapest <item> [--units N]` svarar nu med detta träd (med
+        vad alternativen hade kostat vid varje nod), och visar joint-routes som
+        ren information. Tidigare prissatte `cheapest` en routes inputs som köpta
+        på AH och `chain` köpte allt det inte höll — ingen av dem kunde välja
+        köp/tillverka för en INPUT, därav generaliseringen innan layouten låstes.
+      * **Layoutbeslut i Crafting-fliken**: när det finns en kedja visas bara
+        dess operationer i sammanfattning/flöde/per-gem-tabell; behov (`need`)
+        som kedjan inte gör får en egen sektion "Sourcing: buy it or make it"
+        med träden (`SOURCING_UNITS` = 100). Skälet: en operation utanför
+        kedjan har ingen naturlig storlek (att prissätta "600 smältningar"
+        gav t.ex. ett absurt förlusttal); frågan för den är per-enhet-köp-eller-
+        tillverka, alltså trädet.
+      * **Fortfarande öppet**: mixad sourcing (köp en del, tillverka resten);
+        `chain` (framåt) och `procure` (bakåt) är separata verktyg — en
+        målstyrd plan för hela Living Steel-kedjan från råmaterial vore nästa
+        steg; `chain` kräver att operationer skapats uppströms först;
+        prisgränsen mot skräplistningar (se kedjeavsnittet) gäller även här.
     - **Kedjan: hela flödet Kyparite → gems → transmutes (2026-09-21, byggt)**:
       Simons egentliga fråga är inte "lönar transmute X" utan "vad kostar
       3 000 Kyparite + de Golden Lotus som går åt, jämfört med vad det hade
