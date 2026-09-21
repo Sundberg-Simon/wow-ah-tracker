@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
-import { sumCopper } from "./money.js";
+import { fraction, type Fraction } from "./fraction.js";
+import { mulRound, sumCopper } from "./money.js";
 import { assertPositiveInt, ValidationError } from "./validate.js";
 
 /*
@@ -110,6 +111,36 @@ export function walkBook(book: PriceBook | undefined, quantity: number): WalkRes
     remaining -= take;
   }
   return { filled: quantity - remaining, shortfall: remaining, cost: sumCopper(parts) };
+}
+
+export interface FractionalWalk {
+  /** Exact copper to buy the units that could be bought. */
+  cost: number;
+  /** False when the market could not supply all the units - `cost` is then a lower bound. */
+  complete: boolean;
+}
+
+/**
+ * Cost of buying a possibly fractional number of units (expected yields rarely
+ * come out whole): the whole units are walked up the ladder exactly, and the
+ * leftover fraction is charged at the price of the next unit.
+ */
+export function walkBookFractional(book: PriceBook | undefined, units: Fraction): FractionalWalk {
+  if (units.num <= 0) return { cost: 0, complete: true };
+  const remainder = units.num % units.den;
+  const whole = (units.num - remainder) / units.den;
+  let cost = 0;
+  if (whole > 0) {
+    const w = walkBook(book, whole);
+    if (w.shortfall > 0) return { cost: w.cost, complete: false };
+    cost = w.cost;
+  }
+  if (remainder > 0) {
+    const next = walkBook(book, whole + 1);
+    if (next.shortfall > 0) return { cost, complete: false };
+    cost += mulRound(fraction(remainder, units.den), next.cost - cost);
+  }
+  return { cost, complete: true };
 }
 
 // ---- persistence (insert-only history, so a report can fall back to the last known prices) ----

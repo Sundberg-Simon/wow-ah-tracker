@@ -355,8 +355,10 @@ async function loadCraftingTab(): Promise<{ html: string; summary: string }> {
   try {
     db = openCraftingDb();
     const model = await buildCraftingModel({ db, fetchDump: fetchCommodityDump });
-    const parts = model.economics.map((e) =>
-      e.totals.profit === null ? `${e.operation.name}: profit unknown` : `${e.operation.name}: ${gold(e.totals.profit)} per ${model.executions} executions`,
+    const parts = model.sourcing.map((s) =>
+      s.saving === null
+        ? `${s.economics.operation.name}: saving unknown`
+        : `${s.economics.operation.name}: ${gold(s.saving)} saved vs buying, per ${model.executions} executions (${s.verdict})`,
     );
     return {
       html: craftingTabHtml(model),

@@ -12,7 +12,14 @@ import {
 } from "../src/crafting/backup.js";
 import { craftingDbPath, openCraftingDb } from "../src/crafting/db.js";
 import { fetchItemName, searchItemsByName, type StaticGet } from "../src/crafting/itemLookup.js";
-import { describeItem, listItems, resolveItem, setItemName } from "../src/crafting/items.js";
+import { fetchCommodityDump } from "../src/crafting/blizzardMarket.js";
+import { formatCheapestCost, getCheapestCost } from "../src/crafting/cheapest.js";
+import { DEFAULT_EXECUTIONS } from "../src/crafting/craftingReport.js";
+import { describeItem, getItemName, listItems, resolveItem, setItemName } from "../src/crafting/items.js";
+import { clearPolicy, getPolicies, POLICIES, setPolicy } from "../src/crafting/policy.js";
+import { loadPrices } from "../src/crafting/prices.js";
+import { computeEconomics } from "../src/crafting/profit.js";
+import { analyzeSourcing } from "../src/crafting/sourcing.js";
 import {
   addOperation,
   findOperationId,
@@ -51,6 +58,11 @@ const USAGE = `WoW Crafting Optimizer - local data CLI (data-private/crafting.sq
   npm run crafting -- op show <id|name>
   npm run crafting -- op remove <id>
 
+  npm run crafting -- policy set <${POLICIES.join("|")}> <item> [<item> ...]
+  npm run crafting -- policy list
+  npm run crafting -- policy clear <item> [<item> ...]
+  npm run crafting -- cheapest <item> [--executions N]   buy it, or run an operation that yields it? (with the reasoning)
+
   npm run crafting -- backup create                   snapshot + verify (also runs automatically after every change)
   npm run crafting -- backup list
   npm run crafting -- backup verify [<name|path>]     default: the newest backup
@@ -61,6 +73,10 @@ is kept (so a backup made right after a mistake never overwrites the good one), 
 day for 30 days. Set CRAFTING_BACKUP_EXTRA_DIR in
 .env to also copy each backup to another drive or a cloud-synced folder (a same-disk copy can't
 survive losing the disk).
+
+A policy says what an item is worth to you when it comes out of an operation as a by-product:
+need = you use it in your own crafts (worth what buying that many would cost), sell = worth the
+lowest price minus the AH cut, ignore = worth nothing. No policy = unknown (never guessed).
 
 A batch is a COMPLETE record: list every output item you got. Anything you leave
 out counts as 0 for that batch's ore, which lowers its yield.
@@ -75,7 +91,7 @@ const staticGet: StaticGet = (path, params) => blizzardGet(path, { namespace: "s
 
 // Commands that change the stored data. Each one is followed by an automatic backup: that is the
 // moment new, irreplaceable observations exist.
-const WRITE_COMMANDS = new Set(["item add", "item fetch", "op add", "op remove", "prospect add", "prospect remove"]);
+const WRITE_COMMANDS = new Set(["item add", "item fetch", "op add", "op remove", "prospect add", "prospect remove", "policy set", "policy clear"]);
 
 const kb = (bytes: number) => `${(bytes / 1024).toFixed(1)} KB`;
 
@@ -170,6 +186,7 @@ async function main(): Promise<void> {
       output: { type: "string", multiple: true },
       "from-prospecting": { type: "string" },
       source: { type: "string" },
+      executions: { type: "string" },
       yes: { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
@@ -274,6 +291,44 @@ async function main(): Promise<void> {
         to: values.to,
       });
       console.log(formatYields(db, observed, values.per ? parseCount("--per", values.per) : 100));
+    } else if (group === "policy" && action === "set") {
+      const [policy, ...items] = rest;
+      if (!policy || items.length === 0) throw new ValidationError(`usage: policy set <${POLICIES.join("|")}> <item> [<item> ...]`);
+      for (const raw of items) {
+        const itemId = resolveItem(db, raw);
+        setPolicy(db, itemId, policy);
+        console.log(`${describeItem(db, itemId)}: ${policy}`);
+      }
+    } else if (group === "policy" && action === "clear") {
+      if (rest.length === 0) throw new ValidationError("usage: policy clear <item> [<item> ...]");
+      for (const raw of rest) {
+        const itemId = resolveItem(db, raw);
+        console.log(clearPolicy(db, itemId) ? `${describeItem(db, itemId)}: policy cleared (unknown)` : `${describeItem(db, itemId)}: had no policy`);
+      }
+    } else if (group === "policy" && action === "list") {
+      const policies = [...getPolicies(db)].sort((a, b) => a[1].localeCompare(b[1]) || a[0] - b[0]);
+      if (policies.length === 0) console.log("No policies set.");
+      for (const [itemId, policy] of policies) console.log(`${policy.padEnd(7)} ${describeItem(db, itemId)}`);
+    } else if (group === "cheapest") {
+      const target = resolveItem(db, [action, ...rest].filter(Boolean).join(" "));
+      const executions = values.executions ? parseCount("--executions", values.executions) : DEFAULT_EXECUTIONS;
+      const operations = listOperations(db).map((o) => resolveOperation(db, o.operationId));
+      const ids = new Set<number>([target]);
+      for (const op of operations) {
+        for (const i of op.inputs) ids.add(i.itemId);
+        for (const o of op.outputs) ids.add(o.itemId);
+      }
+      const prices = await loadPrices(db, fetchCommodityDump, ids);
+      const policies = getPolicies(db, ids);
+      const analyses = operations.map((op) => analyzeSourcing(computeEconomics(op, prices.books, { executions }), prices.books, policies));
+      console.log(
+        prices.source === "live"
+          ? `Prices: live (Blizzard dump ${prices.observedNewest}). Sized for ${executions} executions of each operation.`
+          : `Prices: ${prices.source}${prices.observedOldest ? ` (dump ${prices.observedOldest})` : ""}. Sized for ${executions} executions of each operation.`,
+      );
+      if (prices.error) console.warn(`  ${prices.error}`);
+      console.log("");
+      console.log(formatCheapestCost(getCheapestCost({ itemId: target, analyses, books: prices.books, nameOf: (id) => getItemName(db, id) ?? String(id) })));
     } else if (group === "backup" && action === "create") {
       printBackup(createBackup(db, backupConfig()));
     } else {

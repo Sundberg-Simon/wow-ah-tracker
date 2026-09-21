@@ -1,5 +1,7 @@
 import type { Fraction } from "./fraction.js";
+import type { Policy } from "./policy.js";
 import type { OperationEconomics } from "./profit.js";
+import type { SourcingAnalysis } from "./sourcing.js";
 
 /*
  * The crafting tab is drawn from this graph, not straight from the economics
@@ -23,6 +25,8 @@ export interface ItemNode {
   unitPrice: number | null;
   /** Units listed on the market at any price right now (0 = nothing listed). */
   listedQuantity: number;
+  /** What the item is to the player (need / sell / ignore); null = not set. Only outputs can have one. */
+  policy: Policy | null;
   flags: FlowFlag[];
 }
 
@@ -34,6 +38,8 @@ export interface OperationNode {
   operationKind: string;
   executions: number;
   economics: OperationEconomics;
+  /** Buy-vs-run analysis for this operation, when policies were supplied. */
+  sourcing: SourcingAnalysis | null;
 }
 
 export type FlowNode = ItemNode | OperationNode;
@@ -43,7 +49,11 @@ export interface FlowEdge {
   to: string;
   /** Units moved across all executions (exact for outputs, which are expectations). */
   quantity: Fraction;
-  /** Input edge: what buying it costs. Output edge: gross sale value at the current price. Null = unknown. */
+  /**
+   * Input edge: what buying it costs. Output edge: what it is worth to the
+   * player under its policy (or, without a sourcing analysis, its gross sale
+   * value at the current price). Null = unknown.
+   */
   value: number | null;
 }
 
@@ -58,22 +68,32 @@ const opId = (id: number) => `op:${id}`;
 export function buildFlowGraph(
   economics: readonly OperationEconomics[],
   nameOf: (itemId: number) => string,
+  /** Optional, parallel to `economics`: when given, output edges carry the policy-based value. */
+  sourcing?: readonly SourcingAnalysis[],
 ): FlowGraph {
   const nodes = new Map<string, FlowNode>();
   const edges: FlowEdge[] = [];
 
-  const itemNode = (id: number, unitPrice: number | null, listedQuantity: number, flags: FlowFlag[]): void => {
+  const itemNode = (
+    id: number,
+    unitPrice: number | null,
+    listedQuantity: number,
+    policy: Policy | null,
+    flags: FlowFlag[],
+  ): void => {
     const existing = nodes.get(itemId(id)) as ItemNode | undefined;
     if (existing) {
       for (const f of flags) if (!existing.flags.includes(f)) existing.flags.push(f);
       existing.unitPrice ??= unitPrice;
+      existing.policy ??= policy;
       return;
     }
-    nodes.set(itemId(id), { id: itemId(id), kind: "item", itemId: id, label: nameOf(id), unitPrice, listedQuantity, flags: [...flags] });
+    nodes.set(itemId(id), { id: itemId(id), kind: "item", itemId: id, label: nameOf(id), unitPrice, listedQuantity, policy, flags: [...flags] });
   };
 
-  for (const e of economics) {
+  economics.forEach((e, index) => {
     const op = e.operation;
+    const analysis = sourcing?.[index] ?? null;
     nodes.set(opId(op.operationId), {
       id: opId(op.operationId),
       kind: "operation",
@@ -82,19 +102,29 @@ export function buildFlowGraph(
       operationKind: op.kind,
       executions: e.executions,
       economics: e,
+      sourcing: analysis,
     });
     for (const i of e.inputs) {
-      itemNode(i.itemId, i.minPrice, i.listedQuantity, i.status === "ok" ? [] : [i.status === "partial" ? "partial" : "no-price"]);
+      itemNode(i.itemId, i.minPrice, i.listedQuantity, null, i.status === "ok" ? [] : [i.status === "partial" ? "partial" : "no-price"]);
       edges.push({ from: itemId(i.itemId), to: opId(op.operationId), quantity: { num: i.quantity, den: 1 }, value: i.cost });
     }
     for (const o of e.outputs) {
+      const gem = analysis?.gems.find((g) => g.itemId === o.itemId) ?? null;
       const flags: FlowFlag[] = [];
-      if (o.status === "no-price") flags.push("no-price");
-      if (o.thin) flags.push("thin");
-      itemNode(o.itemId, o.unitPrice, o.listedQuantity, flags);
-      edges.push({ from: opId(op.operationId), to: itemId(o.itemId), quantity: o.expectedUnits, value: o.gross });
+      if (gem) {
+        // With a policy, only the flags that matter for it: selling can be thin, needing can be short of supply.
+        if (gem.policy === "sell" && o.status === "no-price") flags.push("no-price");
+        if (gem.policy === "need" && gem.buyCost === null) flags.push("no-price");
+        if (gem.policy === "need" && gem.buyLowerBound) flags.push("partial");
+        if (gem.thin) flags.push("thin");
+      } else {
+        if (o.status === "no-price") flags.push("no-price");
+        if (o.thin) flags.push("thin");
+      }
+      itemNode(o.itemId, o.unitPrice, o.listedQuantity, gem?.policy ?? null, flags);
+      edges.push({ from: opId(op.operationId), to: itemId(o.itemId), quantity: o.expectedUnits, value: gem ? gem.credit : o.gross });
     }
-  }
+  });
   return { nodes: [...nodes.values()], edges };
 }
 
