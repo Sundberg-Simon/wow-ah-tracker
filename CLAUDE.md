@@ -1039,10 +1039,23 @@ eftersom.]
         (run 77, 92/92 realmer, 397 rader) gav fem serier (271441 ×308/311,
         271440 ×308/311, 271435 ×308) med rimliga, klart åtskilda priser;
         genererad `data.lua` + addonets seed och sammanfattning körda i
-        Lua-interpretator (16 kontroller). **Kvar**: pusha, kör den forcerade
-        CI-verifieringen (se "Första gången ett patch-specifikt item läggs
-        till" nedan — nu aktuell: 3 patch-items finns), samt Simons
-        spelverifiering av sammanfattningsraderna.
+        Lua-interpretator (16 kontroller).
+      * **Verifierat i skarp CI 2026-09-21** (pushat 18781d2, forcerad
+        dispatch, run 35606386698): sync OK, `Sync run 78 OK ... realms=92/92
+        rows=397` (INTE idle-raden), exakt samma fem serier och siffror som
+        den lokala körningen, deploy grön, den publicerade `data.lua` på Pages
+        har `variants`-block för alla tre items. `npm run health` (icke-idle)
+        är RÖD direkt efteråt ("only 2 successful runs in 24h, expected ≥ 4")
+        — förväntat: bara två snapshot-körningar finns sedan de patch-
+        specifika items lades till (tidigare var synken idle); går grön när
+        ≥ 4 körningar hunnit samlas inom 24 h (~ ett halvt dygn). Tills dess
+        kan health.yml ge misslyckad-körning-mejl — inget nytt fel.
+      * **Kvar**: (1) nästa NATURLIGA schemalagda tick — ska antingen
+        självspärras ("Skipping sync: last successful run was Xmin ago") eller
+        ge en ny riktig körning med rows > 0; (2) health grön i schemalagt
+        läge; (3) Simons spelverifiering av sammanfattningsraderna
+        (`[ilvl 308]` osv. vid inloggning/`/waht`) — addonfilerna och en färsk
+        `data.lua` är installerade i AddOns-mappen.
 
 ## Vad som är byggt och verifierat hittills
 - **Milestone 1**: OAuth-token, connected-realm-upplösning, per-realm-
