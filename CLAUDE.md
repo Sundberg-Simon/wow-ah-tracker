@@ -966,6 +966,38 @@ eftersom.]
       transmutes som ska in först och deras input/output/sannolikheter —
       fråga Simon, hitta aldrig på speldata.
 
+17. **Patch-specifik gear spåras per ilvl, inte per bas-id (pågår, steg 1
+    av 2).** Bakgrund 2026-09-21: samma bas-item (t.ex. Crushing Coiler
+    Coif, 271441) säljs i många varianter under SAMMA item-id, och
+    varianterna prissätts mycket olika (heroic-stegen 12841/12842/12843:
+    ~25 900 / ~31 000 / ~60 000 g). Simon bryr sig bara om **item level**,
+    inte om sekundärstats/socklar/övriga bonus-id:n.
+    - **Vad AH-API:t ger**: bara `bonus_lists`/`modifiers`/`context`, aldrig
+      ilvl. Skillnaden mellan heroic-varianterna är ETT upgrade-steg-id;
+      dessutom fragmenterar extra id:n (6652 mot 40–43, 13695 mot 13696)
+      samma variant i flera exakta mängder — exakt mängd-matchning på hela
+      `bonus_lists` fungerar alltså inte. Det finns ingen bonus-id→ilvl-
+      tabell i Blizzards API (och externa källor bryter mot "bara Blizzard").
+      Mappningen ilvl → id:n lärs därför in från Simons egna exporter (se
+      nedan) och läggs sedan i trackedItems.json (steg 2, EJ byggt).
+    - **Steg 1 (byggt 2026-09-21, EJ verifierat i spelet)**:
+      `Categorizer.lua` delar upp gear per ilvl i bag-kolumnen
+      (`GetDetailedItemLevelInfo`; gear = vapen/rustning med equip-slot;
+      övrigt har inga varianter). `+S` på gear lägger till EXAKT den ilvl:en
+      (nyckel `"id@ilvl"` i `WowAHTrackerCategorizerDB.patchSpecific`);
+      `+P` förblir bas-id (permanent). En äldre bas-post utan ilvl täcker
+      alla ilvl och visas som `[any ilvl]` så Simon kan ta bort den och
+      lägga till per ilvl. Exporten har nya fält `ilvl=` och `bonus=` samt
+      en `# Bags`-sektion med ALLA väskitems (antal + `staged=`) så de kan
+      jämföras mot `config/trackedItems.json` (den lista synken använder).
+      Testat i Lua-interpretator (34 kontroller); saknar spelverifiering.
+    - **Steg 2 (ej påbörjat, fråga Simon först)**: `variants` i
+      trackedItems.json, synk-matchning mot en trimmad kärn-mängd av
+      bonus-id:n ("innehåller alla", mest specifik vinner), nullable
+      variantkolumn via bakåtkompatibel migrering, per-variant rapport/
+      `data.lua`. Körs sedan med "första patch-specifika itemet"-
+      verifieringen ovan.
+
 ## Vad som är byggt och verifierat hittills
 - **Milestone 1**: OAuth-token, connected-realm-upplösning, per-realm-
   och commodity-filtrering mot riktiga item-ID:n (128671, 72145 m.fl.) —
