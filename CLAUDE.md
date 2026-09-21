@@ -1160,12 +1160,16 @@ eftersom.]
         specifika items lades till (tidigare var synken idle); går grön när
         ≥ 4 körningar hunnit samlas inom 24 h (~ ett halvt dygn). Tills dess
         kan health.yml ge misslyckad-körning-mejl — inget nytt fel.
-      * **Kvar**: (1) nästa NATURLIGA schemalagda tick — ska antingen
-        självspärras ("Skipping sync: last successful run was Xmin ago") eller
-        ge en ny riktig körning med rows > 0; (2) health grön i schemalagt
-        läge; (3) Simons spelverifiering av sammanfattningsraderna
-        (`[ilvl 308]` osv. vid inloggning/`/waht`) — addonfilerna och en färsk
-        `data.lua` är installerade i AddOns-mappen.
+      * **Uppföljning 2026-09-21**: (1) nästa NATURLIGA schemalagda tick
+        verifierad — run 79 (16:39Z) gav en ny riktig körning med rows = 403
+        (>55 min efter förra, så ingen självspärr att se); (3) **spelverifierad
+        av Simon**: inloggningsraderna (`[ilvl 308]` osv. vid inloggning/`/waht`)
+        och `/waht categorize` stämmer. **Kvar**: (2) health grön i SCHEMALAGT
+        läge — den var röd tills ≥ 4 snapshot-körningar hunnit samlas (GitHub
+        tappade ticks 16:39Z–20:12Z); grön manuellt efter en forcerad körning
+        (run 80), inte än bekräftad av en schemalagd health-körning.
+        Ny lärdom: när ticks tappas och patch-items just lagts till kan health
+        gå röd i onödan — en forcerad `sync.yml`-dispatch löser det.
 
 ## Vad som är byggt och verifierat hittills
 - **Milestone 1**: OAuth-token, connected-realm-upplösning, per-realm-
