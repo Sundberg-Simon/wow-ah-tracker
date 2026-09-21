@@ -21,6 +21,7 @@ import {
 import { formatGold, mulRound, sumCopper } from "./money.js";
 import { addOperation, resolveOperation } from "./operations.js";
 import { addProspectingBatch } from "./prospecting.js";
+import { addOperationRun } from "./runs.js";
 import { AH_FEE_RATE, computeEconomics } from "./profit.js";
 
 // Ids, prices and yields are arbitrary fixtures, NOT real game data.
@@ -426,6 +427,40 @@ describe("craftingTabHtml", () => {
     assert.match(html, /unknown/);
     assert.ok(!/\+\d[\d,]*\.\d\dg/.test(html), "no fabricated profit figure");
     assert.match(html, /offline/);
+  });
+
+  it("keeps an operation with no data out of the numbers and lists it under 'Waiting for data'", async () => {
+    const { db } = prospectFixture();
+    for (const [id, name] of [[ORE, "Test Ore"], [GEM_A, "Gem A"], [GEM_B, "Gem B"], [3010, "Lotus"]] as const) setItemName(db, id, name);
+    setPolicy(db, GEM_A, "need");
+    setPolicy(db, GEM_B, "ignore");
+    addOperation(db, { kind: "transmute", name: "Transmute Waiting", inputs: [{ itemId: GEM_A, quantity: 1 }, { itemId: 3010, quantity: 1 }], fromRuns: {} });
+    const html = craftingTabHtml(await buildCraftingModel({ db, fetchDump: dump, executions: 10, now: new Date(T0) }));
+    assert.match(html, /Waiting for data/);
+    assert.match(html, /1 x Gem A \+ 1 x Lotus/);
+    assert.match(html, /no runs logged for Transmute Waiting/);
+    assert.match(html, /run add/);
+    assert.ok(!html.split("Waiting for data")[0].includes("Transmute Waiting"), "not in the summary or the flow above");
+    assert.match(html, /cheaper to run/, "the operation that has data is still analysed");
+  });
+
+  it("shows only the waiting list when no operation has data yet", async () => {
+    const db = freshDb();
+    addOperation(db, { kind: "transmute", name: "Only Waiting", inputs: [{ itemId: GEM_A, quantity: 1 }], fromRuns: {} });
+    const html = craftingTabHtml(await buildCraftingModel({ db, fetchDump: dump, executions: 10, now: new Date(T0) }));
+    assert.match(html, /Waiting for data/);
+    assert.ok(!/craft-summary/.test(html.replace(/\.craft-summary[^}]*}/g, "")), "no empty summary table");
+    assert.ok(!/class="flow"/.test(html), "no empty flow");
+  });
+
+  it("reports units made and units used separately for an item that one operation makes and another consumes", async () => {
+    const { db } = prospectFixture(); // makes 5 Gem A per 10 executions
+    const chain = addOperation(db, { kind: "transmute", name: "A to B", inputs: [{ itemId: GEM_A, quantity: 1 }, { itemId: 3010, quantity: 1 }], fromRuns: {} });
+    addOperationRun(db, { operationId: chain, executions: 10, outputs: [{ itemId: GEM_B, quantity: 9 }], performedOn: "2026-09-21" });
+    const html = craftingTabHtml(await buildCraftingModel({ db, fetchDump: dump, executions: 10, now: new Date(T0) }));
+    assert.match(html, /made: 5 = 125% of the 4 listed/);
+    assert.match(html, /used: 10 = 250% of the 4 listed/);
+    assert.ok(!/15 = 375%/.test(html), "the two flows must not be added together");
   });
 
   it("says so when no operations exist", () => {

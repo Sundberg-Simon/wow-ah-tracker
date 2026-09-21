@@ -1,5 +1,6 @@
 import { walkBook, type PriceBook } from "./market.js";
 import { formatGold } from "./money.js";
+import type { OperationKind } from "./operations.js";
 import type { GemSourcing, SourcingAnalysis } from "./sourcing.js";
 
 /*
@@ -12,7 +13,10 @@ import type { GemSourcing, SourcingAnalysis } from "./sourcing.js";
  * The other outputs are credited under the player's policy (see policy.ts).
  */
 
-export type Strategy = "BUY" | "PROSPECT";
+export type Strategy = "BUY" | "PROSPECT" | "TRANSMUTE" | "CRAFT";
+
+/** The way of getting an item through an operation is named after what kind of operation it is. */
+const strategyFor = (kind: OperationKind): Strategy => (kind === "prospect" ? "PROSPECT" : kind === "transmute" ? "TRANSMUTE" : "CRAFT");
 
 export interface CostNode {
   label: string;
@@ -77,11 +81,12 @@ function prospectOption(target: GemSourcing, a: SourcingAnalysis, nameOf: (id: n
   const net =
     a.inputCost !== null && others.every((g) => g.credit !== null) ? a.inputCost - others.reduce((s, g) => s + (g.credit as number), 0) : null;
   children.push({ label: `= net cost of ${fmtUnits(units(target))} x ${nameOf(target.itemId)}`, copper: net, children: [] });
+  const strategy = strategyFor(op.kind);
   return {
-    strategy: "PROSPECT",
+    strategy,
     via: op.name,
     unitCost,
-    tree: { label: `PROSPECT via ${op.name}: per ${nameOf(target.itemId)}`, copper: unitCost, children },
+    tree: { label: `${strategy} via ${op.name}: per ${nameOf(target.itemId)}`, copper: unitCost, children },
   };
 }
 
@@ -135,6 +140,13 @@ export function getCheapestCost(args: {
     for (const w of a.warnings) if (!warnings.includes(w)) warnings.push(w);
   }
 
+  // An operation with no logged data yet doesn't know what it yields, so it can't be compared - say so
+  // instead of silently leaving it out.
+  const uncompared = analyses.filter((a) => a.gems.length === 0).map((a) => a.economics.operation.name);
+  if (uncompared.length > 0) {
+    warnings.push(`${uncompared.length} operation(s) have no logged data yet, so what they yield is unknown and they were not compared: ${uncompared.join(", ")}`);
+  }
+
   const known = options.filter((o) => o.unitCost !== null).sort((x, y) => (x.unitCost as number) - (y.unitCost as number));
   return {
     itemId,
@@ -149,6 +161,9 @@ export function getCheapestCost(args: {
 /** Plain-text rendering of the decision and its tree (used by the CLI). */
 export function formatCheapestCost(result: CheapestCost): string {
   const money = (c: number | null) => (c === null ? "unknown" : formatGold(c));
+  // A cost of zero or less means the other outputs more than pay for the inputs; say that instead of printing a negative price.
+  const unitMoney = (c: number | null) =>
+    c === null ? "unknown per unit" : c <= 0 ? `free (the other outputs more than cover the inputs, by ${formatGold(0 - c)} per unit)` : `${formatGold(c)} per unit`;
   const lines: string[] = [];
   const walk = (n: CostNode, depth: number) => {
     lines.push(`${"  ".repeat(depth)}${n.label}: ${money(n.copper)}`);
@@ -159,16 +174,17 @@ export function formatCheapestCost(result: CheapestCost): string {
     lines.push("  UNKNOWN - a price or a policy is missing (see warnings).");
   } else {
     const c = result.chosen;
-    lines.push(`  ${c.strategy} (${c.via}): ${money(c.unitCost)} per unit` + (result.savingPerUnit === null ? "" : `, ${formatGold(result.savingPerUnit)} cheaper than the alternative`));
+    lines.push(`  ${c.strategy} (${c.via}): ${unitMoney(c.unitCost)}` + (result.savingPerUnit === null ? "" : `, ${formatGold(result.savingPerUnit)} cheaper than the alternative`));
   }
   lines.push("");
   for (const o of [...result.options].sort((x, y) => Number(o_isChosen(result, y)) - Number(o_isChosen(result, x)))) {
-    lines.push(`${o_isChosen(result, o) ? "-> " : "   "}${o.strategy} via ${o.via}: ${money(o.unitCost)} per unit`);
+    lines.push(`${o_isChosen(result, o) ? "-> " : "   "}${o.strategy} via ${o.via}: ${unitMoney(o.unitCost)}`);
     walk(o.tree, 2);
     lines.push("");
   }
-  if (result.options.some((o) => o.strategy === "PROSPECT")) {
-    lines.push("Note: PROSPECT credits the other outputs under your policy, so it only holds if you really use or sell them.");
+  // inputs + the net line = 2 children; anything more means by-products were credited
+  if (result.options.some((o) => o.strategy !== "BUY" && o.tree.children.length > 2)) {
+    lines.push("Note: the other outputs are credited under your policy, so this only holds if you really use or sell them.");
   }
   for (const w of result.warnings) lines.push(`WARNING: ${w}`);
   return lines.join("\n").trimEnd();

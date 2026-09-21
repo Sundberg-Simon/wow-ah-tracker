@@ -30,6 +30,7 @@ import {
   type OperationKind,
 } from "../src/crafting/operations.js";
 import { formatOperation, parseFixedOutputSpec, parseInputSpec } from "../src/crafting/operationsCli.js";
+import { addOperationRun, listOperationRuns, removeOperationRun } from "../src/crafting/runs.js";
 import {
   addProspectingBatch,
   getObservedYields,
@@ -53,10 +54,16 @@ const USAGE = `WoW Crafting Optimizer - local data CLI (data-private/crafting.sq
   npm run crafting -- prospect yields --ore <id|name> [--patch <tag>] [--from <date>] [--to <date>] [--per <ore>]
 
   npm run crafting -- op add --kind ${OPERATION_KINDS.join("|")} --name "<name>" --input <item>:<qty> [--input ...] \\
-        ( --output <item>:<n>[/<d>] [--output ...]  |  --from-prospecting <ore> [--patch <tag>] ) [--source "<text>"]
+        ( --output <item>:<n>[/<d>] [--output ...]  |  --from-prospecting <ore> [--patch <tag>]  |  --from-runs [--patch <tag>] ) \\
+        [--source "<text>"]
   npm run crafting -- op list
   npm run crafting -- op show <id|name>
-  npm run crafting -- op remove <id>
+  npm run crafting -- op remove <id>          (refused while the operation has logged runs)
+
+  npm run crafting -- run add --op <id|name> --count <times performed> --got <item>:<qty> [--got ...] \\
+        [--date YYYY-MM-DD] [--patch <tag>] [--note "<text>"]
+  npm run crafting -- run list [--op <id|name>]
+  npm run crafting -- run remove <run id>
 
   npm run crafting -- policy set <${POLICIES.join("|")}> <item> [<item> ...]
   npm run crafting -- policy list
@@ -82,7 +89,9 @@ A batch is a COMPLETE record: list every output item you got. Anything you leave
 out counts as 0 for that batch's ore, which lowers its yield.
 --count is the total ore consumed (e.g. 100000), not the number of casts.
 --output is EXPECTED units per execution (1/5 = a 1-in-5 proc); --from-prospecting instead
-derives the outputs from your recorded batches of that ore (which must be an --input).
+derives the outputs from your recorded batches of that ore (which must be an --input); --from-runs derives
+them from runs of THIS operation that you log with "run add" (unknown until you have logged some - a run is a
+complete record, so list every item you got, with 0 for a result you did not get).
 --date defaults to today. Names must be registered with "item add"; an ambiguous
 name (same name, several ids) is refused - use the id.`;
 
@@ -91,7 +100,7 @@ const staticGet: StaticGet = (path, params) => blizzardGet(path, { namespace: "s
 
 // Commands that change the stored data. Each one is followed by an automatic backup: that is the
 // moment new, irreplaceable observations exist.
-const WRITE_COMMANDS = new Set(["item add", "item fetch", "op add", "op remove", "prospect add", "prospect remove", "policy set", "policy clear"]);
+const WRITE_COMMANDS = new Set(["item add", "item fetch", "op add", "op remove", "prospect add", "prospect remove", "policy set", "policy clear", "run add", "run remove"]);
 
 const kb = (bytes: number) => `${(bytes / 1024).toFixed(1)} KB`;
 
@@ -187,6 +196,9 @@ async function main(): Promise<void> {
       "from-prospecting": { type: "string" },
       source: { type: "string" },
       executions: { type: "string" },
+      op: { type: "string" },
+      got: { type: "string", multiple: true },
+      "from-runs": { type: "boolean" },
       yes: { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
@@ -246,6 +258,7 @@ async function main(): Promise<void> {
         inputs: values.input.map((spec) => parseInputSpec(db, spec)),
         outputs: values.output?.map((spec) => parseFixedOutputSpec(db, spec)),
         fromProspecting: fromOre ? { oreItemId: resolveItem(db, fromOre), patch: values.patch } : undefined,
+        fromRuns: values["from-runs"] ? { patch: values.patch } : undefined,
       });
       console.log(`Recorded operation #${id}`);
     } else if (group === "op" && action === "list") {
@@ -291,6 +304,37 @@ async function main(): Promise<void> {
         to: values.to,
       });
       console.log(formatYields(db, observed, values.per ? parseCount("--per", values.per) : 100));
+    } else if (group === "run" && action === "add") {
+      if (!values.op || !values.count || !values.got?.length) {
+        throw new ValidationError("run add needs --op, --count and at least one --got");
+      }
+      const operationId = findOperationId(db, /^\d+$/.test(values.op) ? Number(values.op) : values.op);
+      if (operationId === null) throw new ValidationError(`no operation "${values.op}"`);
+      const runId = addOperationRun(db, {
+        operationId,
+        executions: parseCount("--count", values.count),
+        outputs: values.got.map((spec) => parseOutputSpec(db, spec, "--got")),
+        performedOn: values.date ?? todayIso(),
+        patch: values.patch,
+        note: values.note,
+      });
+      console.log(`Recorded run #${runId}`);
+    } else if (group === "run" && action === "list") {
+      let operationId: number | undefined;
+      if (values.op) {
+        const found = findOperationId(db, /^\d+$/.test(values.op) ? Number(values.op) : values.op);
+        if (found === null) throw new ValidationError(`no operation "${values.op}"`);
+        operationId = found;
+      }
+      for (const r of listOperationRuns(db, { operationId })) {
+        const outs = r.outputs.map((o) => `${describeItem(db, o.itemId)} x${o.quantity}`).join(", ");
+        const tags = [r.patch && `patch ${r.patch}`, r.note].filter(Boolean).join("; ");
+        const opName = listOperations(db).find((o) => o.operationId === r.operationId)?.name ?? `op ${r.operationId}`;
+        console.log(`#${r.runId}  ${r.performedOn}  ${opName} x${r.executions.toLocaleString("en-US")}  ->  ${outs}${tags ? `  [${tags}]` : ""}`);
+      }
+    } else if (group === "run" && action === "remove") {
+      const id = parseCount("run id", rest[0] ?? "");
+      console.log(removeOperationRun(db, id) ? `Removed run #${id}` : `No run #${id}`);
     } else if (group === "policy" && action === "set") {
       const [policy, ...items] = rest;
       if (!policy || items.length === 0) throw new ValidationError(`usage: policy set <${POLICIES.join("|")}> <item> [<item> ...]`);

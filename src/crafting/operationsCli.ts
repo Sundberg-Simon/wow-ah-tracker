@@ -37,7 +37,7 @@ export function formatOperation(db: DatabaseSync, op: ResolvedOperation): string
 
   if (op.basis.type === "fixed") {
     lines.push("Output (expected per execution, fixed):");
-  } else {
+  } else if (op.basis.type === "empirical") {
     const { sample } = op.basis.observed;
     lines.push(
       `Output (expected per execution, from observed yields of ${describeItem(db, op.basis.oreItemId)}` +
@@ -47,6 +47,14 @@ export function formatOperation(db: DatabaseSync, op: ResolvedOperation): string
       sample.batchCount === 0
         ? "  Sample: none"
         : `  Sample: ${sample.oreCount.toLocaleString("en-US")} ore in ${sample.batchCount} batch(es), ${sample.firstDate} .. ${sample.lastDate}`,
+    );
+  } else {
+    const { sample } = op.basis.observed;
+    lines.push(`Output (expected per execution, from your logged runs${op.basis.patch ? `, patch ${op.basis.patch}` : ""}):`);
+    lines.push(
+      sample.runCount === 0
+        ? "  Sample: none"
+        : `  Sample: ${sample.executions.toLocaleString("en-US")} execution(s) in ${sample.runCount} run(s), ${sample.firstDate} .. ${sample.lastDate}`,
     );
   }
   for (const o of op.outputs) {

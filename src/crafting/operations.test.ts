@@ -167,8 +167,10 @@ describe("addOperation validation", () => {
     rejects(fixedOp({ inputs: [{ itemId: MAT_X, quantity: 1 }, { itemId: MAT_X, quantity: 2 }] }), /listed twice/);
   });
   it("requires exactly one output basis", () => {
-    rejects(fixedOp({ outputs: [] }), /either fixed outputs or fromProspecting/);
-    rejects(fixedOp({ fromProspecting: { oreItemId: MAT_X } }), /either fixed outputs or fromProspecting/);
+    rejects(fixedOp({ outputs: [] }), /exactly one output basis/);
+    rejects(fixedOp({ fromProspecting: { oreItemId: MAT_X } }), /exactly one output basis/);
+    rejects(fixedOp({ fromRuns: {} }), /exactly one output basis/);
+    rejects(prospectOp({ fromRuns: {} }), /exactly one output basis/);
   });
   it("rejects non-positive or duplicated fixed outputs", () => {
     rejects(fixedOp({ outputs: [{ itemId: MAT_Y, expected: { num: 0, den: 1 } }] }), /positive fraction/);

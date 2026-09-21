@@ -2,6 +2,7 @@ import { fractionToNumber } from "./fraction.js";
 import { layerNodes, type FlowEdge, type FlowNode, type ItemNode, type OperationNode } from "./flow.js";
 import type { CraftingTabModel } from "./craftingReport.js";
 import { formatGold } from "./money.js";
+import type { ResolvedOperation } from "./operations.js";
 import type { GemSourcing, SourcingAnalysis } from "./sourcing.js";
 
 // HTML for the earnings report's "Crafting" tab. Pure string building over a
@@ -82,23 +83,40 @@ function itemNodeHtml(n: ItemNode, incoming: FlowEdge[], outgoing: FlowEdge[], n
   ];
   const price = n.unitPrice === null ? `<span class="muted">no price</span>` : `<span class="muted">cheapest ${formatGold(n.unitPrice)}</span>`;
   // How big this flow is next to the whole market: what you'd buy/sell as a share of everything listed.
-  const moved = [...incoming, ...outgoing].filter((e) => e.from.startsWith("op:") || e.to.startsWith("op:")).reduce((s, e) => s + fractionToNumber(e.quantity), 0);
-  const share =
+  // Units made by operations and units used by operations are separate flows (a gem one operation makes and
+  // another consumes must not have the two added together), so each gets its own line when both exist.
+  const sum = (edges: FlowEdge[]) => edges.reduce((s, e) => s + fractionToNumber(e.quantity), 0);
+  const made = sum(incoming.filter((e) => e.from.startsWith("op:")));
+  const used = sum(outgoing.filter((e) => e.to.startsWith("op:")));
+  const shareLine = (moved: number, prefix: string) =>
     n.listedQuantity > 0 && moved > 0
-      ? `<div class="muted" title="Your units next to everything currently listed. Near or above 100% means the price will not hold.">${units(moved)} = ${Math.round((moved / n.listedQuantity) * 100)}% of the ${n.listedQuantity.toLocaleString("en-US")} listed</div>`
+      ? `<div class="muted" title="Your units next to everything currently listed. Near or above 100% means the price will not hold.">${prefix}${units(moved)} = ${Math.round((moved / n.listedQuantity) * 100)}% of the ${n.listedQuantity.toLocaleString("en-US")} listed</div>`
       : "";
+  const both = made > 0 && used > 0;
+  const share = shareLine(made, both ? "made: " : "") + shareLine(used, both ? "used: " : "");
   const policy = isOutput ? policyBadge(n.policy) : "";
   return `<div class="flow-node${n.policy === "ignore" ? " ignored" : ""}"><div class="title">${esc(n.label)} ${policy} ${n.flags.map(badge).join(" ")}</div><div>${price}</div>${share}${lines.join("")}</div>`;
+}
+
+/** How much data an operation's yields rest on, or null for a fixed operation. */
+function sampleText(basis: ResolvedOperation["basis"]): string | null {
+  if (basis.type === "empirical") {
+    return `${basis.observed.sample.oreCount.toLocaleString("en-US")} ore in ${basis.observed.sample.batchCount} batch(es)`;
+  }
+  if (basis.type === "empirical-runs") {
+    const s = basis.observed.sample;
+    return s.runCount === 0 ? "no runs logged yet" : `${s.executions.toLocaleString("en-US")} execution(s) in ${s.runCount} run(s)`;
+  }
+  return null;
 }
 
 function operationNodeHtml(n: OperationNode): string {
   const e = n.economics;
   const s = n.sourcing;
   const basis = e.operation.basis;
+  const described = sampleText(basis);
   const sample =
-    basis.type === "empirical"
-      ? `<div class="muted">yields from ${basis.observed.sample.oreCount.toLocaleString("en-US")} ore in ${basis.observed.sample.batchCount} batch(es)</div>`
-      : "";
+    described === null ? "" : `<div class="muted">${basis.type === "empirical-runs" && basis.observed.sample.runCount === 0 ? described : `yields from ${described}`}</div>`;
   const rows = (
     s
       ? [
@@ -125,8 +143,34 @@ function verdictHtml(s: SourcingAnalysis): string {
   return `<span class="warn">unknown</span>`;
 }
 
+/** An operation that knows what it yields (fixed, or with logged batches/runs); the rest are waiting for data. */
+const isReady = (s: SourcingAnalysis) => s.economics.operation.outputs.length > 0;
+
+/** Operations that can't be analysed yet, with how to give them the data they need. */
+function waitingSection(model: CraftingTabModel): string {
+  const waiting = model.sourcing.filter((s) => !isReady(s));
+  if (waiting.length === 0) return "";
+  const items = waiting
+    .map((s) => {
+      const op = s.economics.operation;
+      const inputs = op.inputs.map((i) => `${i.quantity} x ${esc(model.itemNames.get(i.itemId) ?? String(i.itemId))}`).join(" + ");
+      const how = op.basis.type === "empirical" ? "record a prospecting batch" : "log a run";
+      return `<li><strong>${esc(op.name)}</strong> <span class="muted">[${esc(op.kind)}; ${inputs}]</span> &mdash; ${esc(op.warnings[0] ?? "no data yet")}; ${how} to include it.</li>`;
+    })
+    .join("");
+  return (
+    `<h3>Waiting for data</h3>` +
+    `<p class="muted">These operations don't know what they yield yet, so they are left out of the numbers above rather than shown as guesses. ` +
+    `Log real results with <code>npm run crafting -- run add --op "&lt;name&gt;" --count &lt;times performed&gt; --got &lt;item&gt;:&lt;qty&gt; ...</code> ` +
+    `(list every item you got, 0 for a result you didn't get) and they join the analysis on the next report.</p>` +
+    `<ul>${items}</ul>`
+  );
+}
+
 function summaryTable(model: CraftingTabModel): string {
-  const rows = model.sourcing
+  const ready = model.sourcing.filter(isReady);
+  if (ready.length === 0) return "";
+  const rows = ready
     .map((s) => {
       const breakEven = s.breakEvenInputPrice === null ? "" : formatGold(s.breakEvenInputPrice);
       return (
@@ -234,24 +278,25 @@ export function craftingTabHtml(model: CraftingTabModel, now: Date = model.gener
     })
     .join(`<div class="flow-arrow">&rarr;</div>`);
 
-  const samples = model.economics
-    .map((e) => e.operation.basis)
-    .flatMap((b) => (b.type === "empirical" ? [b.observed.sample.oreCount] : []));
-  const smallest = samples.length ? Math.min(...samples) : null;
+  const samples = model.economics.flatMap((e) => {
+    const text = sampleText(e.operation.basis);
+    return text === null ? [] : [`${e.operation.name}: ${text}`];
+  });
   const feePercent = Math.round(fractionToNumber(model.economics[0].feeRate) * 10000) / 100;
 
   return `<h2>Crafting <span class="private">local only &mdash; from your own prospecting data</span></h2>
   <p class="muted">${sourceText} Sized for ${units(model.executions)} executions of each operation.</p>
   ${errorText}
   ${summaryTable(model)}
-  <div class="flow">${flow}</div>
+  ${flow ? `<div class="flow">${flow}</div>` : ""}
   ${gemTable(model, nameOfItem)}
+  ${waitingSection(model)}
   <ul class="notes">
     <li><strong>How it's counted.</strong> The inputs are bought by walking the auction house from the cheapest listing up, so the cost is what buying that many really costs. Every gem the operation yields is then worth something to <em>you</em>: a gem you <strong>need</strong> is worth what buying that many would cost (you no longer have to buy them; the AH cut doesn't matter), one you <strong>sell</strong> the lowest listed price minus the ${feePercent}% AH cut (measured on your own sales), one you <strong>ignore</strong> nothing. <em>Saving vs buying</em> = what the gems are worth minus what the inputs cost.</li>
     <li><strong>You are assumed to use everything you need.</strong> A batch gives the gems in fixed proportions, and a needed gem is valued at the buy price for every unit of it. Units beyond what you would really use are worth only what you could sell them for.</li>
     <li><strong>Saving per gem.</strong> The input cost is shared between the gems in proportion to what each is worth to you, so every row's saving is its own share and the rows add up to <em>Saving vs buying</em>. The <em>Share of value</em> column shows how much the result leans on one gem: if a single gem is close to half of it, a drop in that gem's price moves the whole answer.</li>
     <li><strong>Thin market</strong> (a gem you sell) means you would sell more units than are listed at all right now: treat its value as an upper bound. The share under each item shows your units next to everything listed.</li>
     <li><strong>Unknown is not zero.</strong> A missing price or a gem with no policy makes the totals unknown instead of pretending the gem is worthless.</li>
-    <li><strong>Expected, not guaranteed.</strong> Yields come from your recorded batches${smallest === null ? "" : ` (smallest sample: ${smallest.toLocaleString("en-US")} ore)`}; rare drops rest on few observations and move as you add batches. Prices move a lot too, so the break-even input price is the steadier number to watch.</li>
+    <li><strong>Expected, not guaranteed.</strong> Yields come from your own logged data${samples.length === 0 ? "" : ` (${esc(samples.join("; "))})`}; rare drops rest on few observations and move as you log more. Prices move a lot too, so the break-even input price is the steadier number to watch.</li>
   </ul>`;
 }

@@ -112,6 +112,37 @@ const MIGRATIONS: string[] = [
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
   );
   `,
+  // v5: logged runs of an operation (empirical yields for transmutes and other multi-input operations)
+  `
+  -- Marks an operation whose outputs come from its own logged runs (see runs.ts).
+  CREATE TABLE operation_run_source (
+    operation_id INTEGER PRIMARY KEY REFERENCES operations (operation_id) ON DELETE CASCADE,
+    patch        TEXT
+  );
+
+  -- One row per logging session: "I did this operation N times and got these items".
+  -- Deliberately NO cascade from operations: logged runs are irreplaceable observations, so an
+  -- operation that has runs cannot be deleted until they are removed on purpose.
+  CREATE TABLE operation_runs (
+    run_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    operation_id INTEGER NOT NULL REFERENCES operations (operation_id),
+    executions   INTEGER NOT NULL CHECK (executions > 0),
+    performed_on TEXT NOT NULL
+      CHECK (performed_on GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+    patch        TEXT,
+    note         TEXT,
+    recorded_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+  );
+  CREATE INDEX operation_runs_op_idx ON operation_runs (operation_id, performed_on);
+
+  -- A run is a COMPLETE record: an item with no row here counts as 0 for that run.
+  CREATE TABLE operation_run_outputs (
+    run_id   INTEGER NOT NULL REFERENCES operation_runs (run_id) ON DELETE CASCADE,
+    item_id  INTEGER NOT NULL CHECK (item_id > 0),
+    quantity INTEGER NOT NULL CHECK (quantity >= 0),
+    PRIMARY KEY (run_id, item_id)
+  );
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
