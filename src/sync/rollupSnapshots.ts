@@ -90,7 +90,7 @@ export async function rollupSnapshots(
   const eligible = await client.query(`SELECT count(*)::int AS n ${COMPLETE_ROWS}`, [cutoff]);
   const groups = await client.query(
     `SELECT count(*)::int AS n FROM (
-       SELECT 1 ${COMPLETE_ROWS} GROUP BY ps.item_id, COALESCE(ps.connected_realm_id, 0), ${groupExpr}
+       SELECT 1 ${COMPLETE_ROWS} GROUP BY ps.item_id, COALESCE(ps.ilvl, 0), COALESCE(ps.connected_realm_id, 0), ${groupExpr}
      ) g`,
     [cutoff],
   );
@@ -112,12 +112,13 @@ export async function rollupSnapshots(
     // Guard: never roll up into a bucket that already has a rollup row.
     const conflicts = await client.query(
       `SELECT count(*)::int AS n FROM (
-         SELECT ps.item_id, ps.connected_realm_id, ${groupExpr} AS bucket_start
+         SELECT ps.item_id, ps.ilvl, ps.connected_realm_id, ${groupExpr} AS bucket_start
          ${COMPLETE_ROWS}
-         GROUP BY ps.item_id, ps.connected_realm_id, ${groupExpr}
+         GROUP BY ps.item_id, ps.ilvl, ps.connected_realm_id, ${groupExpr}
        ) g
        JOIN price_snapshots_rollup r
          ON r.item_id = g.item_id
+        AND COALESCE(r.ilvl, 0) = COALESCE(g.ilvl, 0)
         AND COALESCE(r.connected_realm_id, 0) = COALESCE(g.connected_realm_id, 0)
         AND r.bucket_start = g.bucket_start AND r.bucket_days = $2`,
       [cutoff, opts.bucketDays],
@@ -130,13 +131,13 @@ export async function rollupSnapshots(
 
     const inserted = await client.query(
       `INSERT INTO price_snapshots_rollup
-         (item_id, connected_realm_id, bucket_start, bucket_days, min_price_copper_min, min_price_copper_avg,
+         (item_id, ilvl, connected_realm_id, bucket_start, bucket_days, min_price_copper_min, min_price_copper_avg,
           quantity_avg, quantity_max, listing_count_avg, samples)
-       SELECT ps.item_id, ps.connected_realm_id, ${groupExpr}, $2,
+       SELECT ps.item_id, ps.ilvl, ps.connected_realm_id, ${groupExpr}, $2,
               min(ps.min_price_copper), round(avg(ps.min_price_copper))::bigint,
               round(avg(ps.quantity))::bigint, max(ps.quantity), round(avg(ps.listing_count))::int, count(*)::int
        ${COMPLETE_ROWS}
-       GROUP BY ps.item_id, ps.connected_realm_id, ${groupExpr}
+       GROUP BY ps.item_id, ps.ilvl, ps.connected_realm_id, ${groupExpr}
        RETURNING samples`,
       [cutoff, opts.bucketDays],
     );

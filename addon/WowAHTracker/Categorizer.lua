@@ -182,7 +182,17 @@ local function SeedFromTrackedData()
 	for itemId, item in pairs(WowAhTrackerData.items) do
 		local id = tonumber(itemId)
 		if id and not WowAHTrackerCategorizerDB.permanent[id] and not WowAHTrackerCategorizerDB.patchSpecific[id] then
-			if item.category == "patch-specific" then
+			if item.category == "patch-specific" and item.variants then
+				-- Variant-tracked gear (CLAUDE.md #17): one staged entry per
+				-- tracked item level - never a base entry, which would cover
+				-- every ilvl and hide the per-ilvl bag rows.
+				for ilvl in pairs(item.variants) do
+					local key = EntryKey(id, ilvl)
+					if not WowAHTrackerCategorizerDB.patchSpecific[key] then
+						WowAHTrackerCategorizerDB.patchSpecific[key] = { id = id, name = item.name, ilvl = ilvl }
+					end
+				end
+			elseif item.category == "patch-specific" then
 				WowAHTrackerCategorizerDB.patchSpecific[id] = { id = id, name = item.name }
 			else
 				WowAHTrackerCategorizerDB.permanent[id] = { id = id, name = item.name }

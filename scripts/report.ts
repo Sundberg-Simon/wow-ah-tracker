@@ -33,6 +33,8 @@ interface ItemData {
   id: number;
   name: string;
   category: TrackedItem["category"];
+  /** Item level of the variant this series is (CLAUDE.md #17); null = the item as a whole. */
+  ilvl: number | null;
   /** Hand-set in trackedItems.json; exported to data.lua for the addon's crafted-item stock scan. */
   crafted: boolean;
   capturedAt: Date | null;
@@ -51,7 +53,7 @@ function median(values: number[]): number {
 
 /** One DB round-trip per item; both the HTML and Lua output render from this
  * same result set, so the two files can never disagree with each other. */
-async function gatherItemData(item: TrackedItem): Promise<ItemData> {
+async function gatherItemData(item: TrackedItem, ilvl: number | null = null): Promise<ItemData> {
   // Permanent items are sales-only (CLAUDE.md #14): the sync collects no
   // snapshots for them, but old rows can still exist in the DB (e.g. from a
   // one-off 108-item test run). Never present those as current prices - not in
@@ -62,6 +64,7 @@ async function gatherItemData(item: TrackedItem): Promise<ItemData> {
       id: item.id,
       name: item.name,
       category: item.category,
+      ilvl,
       crafted: item.crafted === true,
       capturedAt: null,
       euMinCopper: null,
@@ -73,8 +76,8 @@ async function gatherItemData(item: TrackedItem): Promise<ItemData> {
   }
 
   const [{ capturedAt, rows }, history] = await Promise.all([
-    getLatestPerRealmPrices(item.id),
-    getEuWideHistory(item.id, { limit: 200 }),
+    getLatestPerRealmPrices(item.id, ilvl),
+    getEuWideHistory(item.id, { limit: 200, ilvl }),
   ]);
 
   if (!capturedAt) {
@@ -82,6 +85,7 @@ async function gatherItemData(item: TrackedItem): Promise<ItemData> {
       id: item.id,
       name: item.name,
       category: item.category,
+      ilvl,
       crafted: item.crafted === true,
       capturedAt: null,
       euMinCopper: null,
@@ -97,7 +101,8 @@ async function gatherItemData(item: TrackedItem): Promise<ItemData> {
     id: item.id,
     name: item.name,
     category: item.category,
-      crafted: item.crafted === true,
+    ilvl,
+    crafted: item.crafted === true,
     capturedAt,
     euMinCopper: Math.min(...prices),
     euMedianCopper: median(prices),
@@ -187,16 +192,21 @@ function buildSparkline(points: HistoryPoint[]): string {
   <div class="trend-range"><span>${copperToGold(min)}g</span><span>${copperToGold(max)}g</span></div>`;
 }
 
+/** "Crushing Coiler Coif [ilvl 308]" for a variant series, the plain name otherwise. */
+function seriesTitleHtml(data: ItemData): string {
+  return escapeHtml(data.name) + (data.ilvl !== null ? ` <span class="ilvl">[ilvl ${data.ilvl}]</span>` : "");
+}
+
 function buildItemSectionHtml(data: ItemData): string {
   if (!data.capturedAt || data.euMinCopper === null || data.euMedianCopper === null) {
     return `<section class="item">
-      <h2>${escapeHtml(data.name)} <span class="muted">(${data.id}, ${data.category})</span></h2>
+      <h2>${seriesTitleHtml(data)} <span class="muted">(${data.id}, ${data.category})</span></h2>
       <p class="empty">No data collected for this item yet - has the sync job run since it was added?</p>
     </section>`;
   }
 
   return `<section class="item">
-    <h2>${escapeHtml(data.name)} <span class="muted">(${data.id}, ${data.category})</span></h2>
+    <h2>${seriesTitleHtml(data)} <span class="muted">(${data.id}, ${data.category})</span></h2>
     <p class="as-of">As of ${renderTimestamp(data.capturedAt)}</p>
     <div class="summary">
       <div><span class="label">Regional min</span><span class="value">${copperToGold(data.euMinCopper)}g</span></div>
@@ -290,20 +300,55 @@ function buildLuaRealmEntry(row: LatestRealmPrice): string {
   return `{ ${fields.join(", ")} }`;
 }
 
-function buildLuaItemEntry(data: ItemData): string {
-  const realms = data.realms.map(buildLuaRealmEntry).join(",\n      ");
-  return `  [${data.id}] = {
-    id = ${data.id},
-    name = ${luaString(data.name)},
-    category = ${luaString(data.category)},
-${data.crafted ? "    crafted = true,\n" : ""}    capturedAt = ${data.capturedAt ? luaString(data.capturedAt.toISOString()) : "nil"},
-    euMinCopper = ${luaNumberOrNil(data.euMinCopper)},
-    euMedianCopper = ${luaNumberOrNil(data.euMedianCopper)},
-    totalQuantity = ${data.totalQuantity},
-    realms = {
-      ${realms}
-    },
-  }`;
+/** The price fields of one series - shared by an item's own entry and each of its variants. */
+function buildLuaPriceFields(data: ItemData, indent: string): string {
+  const realms = data.realms.map(buildLuaRealmEntry).join(`,\n${indent}  `);
+  return [
+    `${indent}capturedAt = ${data.capturedAt ? luaString(data.capturedAt.toISOString()) : "nil"},`,
+    `${indent}euMinCopper = ${luaNumberOrNil(data.euMinCopper)},`,
+    `${indent}euMedianCopper = ${luaNumberOrNil(data.euMedianCopper)},`,
+    `${indent}totalQuantity = ${data.totalQuantity},`,
+    `${indent}realms = {`,
+    `${indent}  ${realms}`,
+    `${indent}},`,
+  ].join("\n");
+}
+
+/**
+ * One data.lua entry per item id. An item tracked as a whole carries its prices
+ * at the top level, as before. A variant-tracked item (CLAUDE.md #17) carries
+ * NO top-level prices - its item levels would blend - and instead a
+ * `variants` table keyed by item level, each with the same price fields.
+ */
+function buildLuaItemEntry(series: ItemData[]): string {
+  const variants = series.filter((d) => d.ilvl !== null);
+  const head = series[0];
+  const lines = [
+    `  [${head.id}] = {`,
+    `    id = ${head.id},`,
+    `    name = ${luaString(head.name)},`,
+    `    category = ${luaString(head.category)},`,
+  ];
+  if (head.crafted) lines.push("    crafted = true,");
+  if (variants.length === 0) {
+    lines.push(buildLuaPriceFields(head, "    "));
+  } else {
+    lines.push("    capturedAt = nil,", "    euMinCopper = nil,", "    euMedianCopper = nil,", "    totalQuantity = 0,", "    realms = {},");
+    lines.push("    variants = {");
+    for (const v of variants) {
+      lines.push(`      [${v.ilvl}] = {`, buildLuaPriceFields(v, "        "), "      },");
+    }
+    lines.push("    },");
+  }
+  lines.push("  }");
+  return lines.join("\n");
+}
+
+/** Series of the same item id, in first-seen order. */
+function groupByItem(series: ItemData[]): ItemData[][] {
+  const groups = new Map<number, ItemData[]>();
+  for (const d of series) groups.set(d.id, [...(groups.get(d.id) ?? []), d]);
+  return [...groups.values()];
 }
 
 function buildLuaConnectedRealms(realms: ConnectedRealmInfo[]): string {
@@ -316,7 +361,7 @@ function buildLuaConnectedRealms(realms: ConnectedRealmInfo[]): string {
 }
 
 function buildLua(items: ItemData[], connectedRealms: ConnectedRealmInfo[]): string {
-  const entries = items.map(buildLuaItemEntry).join(",\n");
+  const entries = groupByItem(items).map(buildLuaItemEntry).join(",\n");
   return `-- Auto-generated by wow-ah-tracker (npm run report) after every successful
 -- sync. Do not edit by hand - regenerated and republished on the same
 -- schedule as reports/index.html. All prices are in copper (WoW's base
@@ -339,8 +384,14 @@ ${entries}
 
 async function main() {
   const items = getActiveTrackedItems();
+  // One series per tracked item level for variant gear (CLAUDE.md #17), else one for the item.
+  const series = items.flatMap((item) =>
+    item.category === "patch-specific" && item.variants && item.variants.length > 0
+      ? item.variants.map((ilvl) => ({ item, ilvl: ilvl as number | null }))
+      : [{ item, ilvl: null as number | null }],
+  );
   const [itemData, connectedRealms] = await Promise.all([
-    Promise.all(items.map(gatherItemData)),
+    Promise.all(series.map((s) => gatherItemData(s.item, s.ilvl))),
     getAllConnectedRealms(),
   ]);
 

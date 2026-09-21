@@ -19,6 +19,17 @@
  *                      because finding deals on specific server clusters
  *                      needs continuous price updates.
  *
+ * variants (OPTIONAL, patch-specific gear only - CLAUDE.md #17):
+ *   Item levels to track separately, e.g. [308, 311]. The same gear id is
+ *   listed at many item levels with very different prices, so each level is
+ *   its own series (price_snapshots.ilvl) and listings at any other level are
+ *   ignored. Absent/empty = the whole item as one series, as before.
+ *   A level is recognised through the upgrade-step bonus id in a listing's
+ *   bonus_lists, via config/ilvlBonusIds.json (bonus id -> item level); a
+ *   variant level no id in that file can produce is never collected (the sync
+ *   warns). Add a row there when a NEW item level is tracked - the in-game
+ *   categorizer's export shows the ids (`bonus=`) next to the item level.
+ *
  * crafted / est_cost_per_unit (both OPTIONAL, report-only):
  *   Orthogonal to category and to everything the sync does - the sync,
  *   data.lua and the addon never read them. They exist only so the local
@@ -48,6 +59,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildSnapshotSpec, type IlvlTable, type SnapshotSpec } from "../src/sync/variants.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -58,12 +70,21 @@ export interface TrackedItem {
   active: boolean;
   /** Report-only, see the header comment. Absent = false. */
   crafted?: boolean;
+  /** Patch-specific gear only: item levels tracked as separate series. See the header comment. */
+  variants?: number[];
   /** Report-only estimated cost of ONE unit, in gold; null/absent = not set. */
   est_cost_per_unit?: number | null;
 }
 
 export const trackedItems: TrackedItem[] = JSON.parse(
   readFileSync(path.join(__dirname, "trackedItems.json"), "utf8"),
+);
+
+/** bonus id -> item level it sets (config/ilvlBonusIds.json). */
+export const ilvlBonusIds: IlvlTable = new Map(
+  Object.entries(JSON.parse(readFileSync(path.join(__dirname, "ilvlBonusIds.json"), "utf8")) as Record<string, number>).map(
+    ([bonusId, ilvl]) => [Number(bonusId), ilvl] as [number, number],
+  ),
 );
 
 export function getActiveTrackedItems(): TrackedItem[] {
@@ -86,4 +107,9 @@ export function getSnapshotTrackedItems(): TrackedItem[] {
 
 export function getSnapshotTrackedItemIds(): number[] {
   return getSnapshotTrackedItems().map((item) => item.id);
+}
+
+/** What the snapshot sync collects per item: the whole item, or only the listed item levels. */
+export function getSnapshotSpec(): SnapshotSpec {
+  return buildSnapshotSpec(getSnapshotTrackedItems());
 }

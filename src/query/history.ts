@@ -10,6 +10,19 @@ const COMPLETE_RUN_CONDITION = `(ps.sync_run_id IS NULL OR EXISTS (
     SELECT 1 FROM sync_runs sr WHERE sr.id = ps.sync_run_id AND sr.success AND NOT sr.partial
   ))`;
 
+/**
+ * Which item-level series to read (CLAUDE.md #17). undefined = no filter (rows of
+ * every series - fine for an item without variants, a blend for variant gear);
+ * null = only rows of an item tracked as a whole; a number = only that item level.
+ */
+export type IlvlFilter = number | null | undefined;
+
+function ilvlCondition(ilvl: IlvlFilter, values: unknown[]): string | null {
+  if (ilvl === undefined) return null;
+  values.push(ilvl);
+  return `ps.ilvl IS NOT DISTINCT FROM $${values.length}`;
+}
+
 export interface HistoryRow {
   capturedAt: Date;
   connectedRealmId: number | null;
@@ -26,10 +39,12 @@ export interface HistoryRow {
  */
 export async function getItemHistory(
   itemId: number,
-  options: { connectedRealmId?: number | null; since?: Date; limit?: number } = {},
+  options: { connectedRealmId?: number | null; ilvl?: IlvlFilter; since?: Date; limit?: number } = {},
 ): Promise<HistoryRow[]> {
   const conditions: string[] = ["ps.item_id = $1", COMPLETE_RUN_CONDITION];
   const values: unknown[] = [itemId];
+  const ilvlCond = ilvlCondition(options.ilvl, values);
+  if (ilvlCond) conditions.push(ilvlCond);
 
   if (options.connectedRealmId !== undefined) {
     values.push(options.connectedRealmId);
@@ -70,10 +85,12 @@ export async function getItemHistory(
  */
 export async function getEuWideHistory(
   itemId: number,
-  options: { since?: Date; limit?: number } = {},
+  options: { ilvl?: IlvlFilter; since?: Date; limit?: number } = {},
 ): Promise<{ capturedAt: Date; minPriceCopper: number; totalQuantity: number }[]> {
   const conditions: string[] = ["ps.item_id = $1", COMPLETE_RUN_CONDITION];
   const values: unknown[] = [itemId];
+  const ilvlCond = ilvlCondition(options.ilvl, values);
+  if (ilvlCond) conditions.push(ilvlCond);
 
   if (options.since) {
     values.push(options.since);
@@ -114,26 +131,33 @@ export interface LatestRealmPrice {
  */
 export async function getLatestPerRealmPrices(
   itemId: number,
+  ilvl?: IlvlFilter,
 ): Promise<{ capturedAt: Date | null; rows: LatestRealmPrice[] }> {
+  // "Latest" is per series: a variant with no listings at the newest capture
+  // still shows its own most recent observation rather than nothing.
+  const latestValues: unknown[] = [itemId];
+  const latestIlvl = ilvlCondition(ilvl, latestValues);
   const { rows: latest } = await pool.query(
     `SELECT MAX(ps.captured_at) AS captured_at
      FROM price_snapshots ps
-     WHERE ps.item_id = $1 AND ${COMPLETE_RUN_CONDITION}`,
-    [itemId],
+     WHERE ps.item_id = $1 AND ${COMPLETE_RUN_CONDITION}${latestIlvl ? ` AND ${latestIlvl}` : ""}`,
+    latestValues,
   );
   const capturedAt: Date | null = latest[0]?.captured_at ?? null;
   if (!capturedAt) {
     return { capturedAt: null, rows: [] };
   }
 
+  const rowValues: unknown[] = [itemId, capturedAt];
+  const rowIlvl = ilvlCondition(ilvl, rowValues);
   const { rows } = await pool.query(
     `SELECT ps.connected_realm_id, cr.realm_names,
             ps.min_price_copper, ps.quantity, ps.listing_count
      FROM price_snapshots ps
      LEFT JOIN connected_realms cr ON cr.connected_realm_id = ps.connected_realm_id
-     WHERE ps.item_id = $1 AND ps.captured_at = $2 AND ${COMPLETE_RUN_CONDITION}
+     WHERE ps.item_id = $1 AND ps.captured_at = $2 AND ${COMPLETE_RUN_CONDITION}${rowIlvl ? ` AND ${rowIlvl}` : ""}
      ORDER BY ps.min_price_copper ASC`,
-    [itemId, capturedAt],
+    rowValues,
   );
 
   return {

@@ -16,7 +16,8 @@
     "rollup": "tsx scripts/rollupSnapshots.ts",
     "typecheck": "tsc --noEmit",
     "crafting": "tsx scripts/crafting.ts",
-    "test:crafting": "node --import tsx --test src/crafting/*.test.ts"
+    "test:crafting": "node --import tsx --test src/crafting/*.test.ts",
+    "test:sync": "node --import tsx --test src/sync/*.test.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

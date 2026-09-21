@@ -12,7 +12,8 @@ import {
   fetchConnectedRealmIds,
 } from "../src/sync/connectedRealms.js";
 import { fetchTrackedAuctionsForRealm, fetchTrackedCommodities } from "../src/sync/auctions.js";
-import { getActiveTrackedItemIds, getActiveTrackedItems } from "../config/trackedItems.js";
+import { getActiveTrackedItemIds, getActiveTrackedItems, ilvlBonusIds } from "../config/trackedItems.js";
+import { buildSnapshotSpec } from "../src/sync/variants.js";
 
 async function main() {
   console.log("1. Requesting OAuth token...");
@@ -38,11 +39,11 @@ async function main() {
   );
 
   console.log(`4. Fetching full auction dump for connected realm ${sampleRealmId}...`);
-  const observations = await fetchTrackedAuctionsForRealm(sampleRealmId, trackedIds);
+  const observations = await fetchTrackedAuctionsForRealm(sampleRealmId, buildSnapshotSpec(getActiveTrackedItems()), ilvlBonusIds);
   console.log(`   Matched ${observations.length} tracked item(s) on this realm:`);
   for (const obs of observations) {
     console.log(
-      `   - item ${obs.itemId}: min ${obs.minPrice} copper, ${obs.totalQuantity} qty across ${obs.listingCount} listing(s)`,
+      `   - item ${obs.itemId}${obs.ilvl !== null ? ` [ilvl ${obs.ilvl}]` : ""}: min ${obs.minPrice} copper, ${obs.totalQuantity} qty across ${obs.listingCount} listing(s)`,
     );
   }
   if (observations.length === 0) {
