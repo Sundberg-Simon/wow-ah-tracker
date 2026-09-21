@@ -526,8 +526,6 @@ describe("craftingTabHtml", () => {
     assert.match(html, /\+5\.00g/);
     assert.match(html, /Lotus/);
     assert.match(html, /stays worth it until Test Ore costs about/);
-    assert.match(html, /Only the profitable steps/);
-    assert.match(html, /Every step pays for itself/, "the transmute pays here, so nothing is skipped");
     // Yield certainty: Gem B was seen 20 times (thin), and the chain's saving is shown against each measured yield.
     assert.match(html, /<th class="num" title="[^"]*">Likely range<\/th>/);
     assert.match(html, /<span class="badge few"[^>]*>few seen \(20\)<\/span>/, "the rarely seen gem is marked");
@@ -565,33 +563,6 @@ describe("craftingTabHtml", () => {
     assert.match(row, /<span class="badge dear"/);
     assert.match(row, /\+50\.0%/, "150 against 100 a day ago");
     assert.match(row, /<svg class="spark"/);
-  });
-
-  it("recommends skipping a step that loses money, and says what that is worth", async () => {
-    const { db } = prospectFixture(); // 10 executions = 50 ore -> 5 Gem A, 1 Gem B
-    for (const [id, name] of [[ORE, "Test Ore"], [GEM_A, "Gem A"], [GEM_B, "Gem B"], [3010, "Lotus"]] as const) setItemName(db, id, name);
-    setPolicy(db, GEM_A, "need");
-    setPolicy(db, GEM_B, "need");
-    const t = addOperation(db, { kind: "transmute", name: "Transmute A to B", inputs: [{ itemId: GEM_A, quantity: 1 }, { itemId: 3010, quantity: 1 }], fromRuns: {} });
-    addOperationRun(db, { operationId: t, executions: 10, outputs: [{ itemId: GEM_B, quantity: 12 }], performedOn: "2026-09-21" });
-    const cheapB = async (): Promise<CommodityDump> => ({
-      lastModified: new Date(T0),
-      auctions: [
-        { item: { id: ORE }, quantity: 20, unit_price: 100 },
-        { item: { id: ORE }, quantity: 100, unit_price: 200 },
-        { item: { id: GEM_A }, quantity: 99, unit_price: 1_500 },
-        { item: { id: GEM_B }, quantity: 50, unit_price: 1_000 },
-        { item: { id: 3010 }, quantity: 99, unit_price: 500 },
-      ],
-    });
-    // With the transmute: cost 10 500, ends with 7 B (7 000) = -3 500. Without it: 5 A (7 500) + 1 B (1 000) - 8 000 ore = +500.
-    const model = await buildCraftingModel({ db, fetchDump: cheapB, executions: 10, now: new Date(T0) });
-    assert.deepEqual([model.bestChain?.fullSaving, model.bestChain?.evaluation.saving, model.bestChain?.gain], [-3_500, 500, 4_000]);
-    const html = craftingTabHtml(model);
-    assert.match(html, /Only the profitable steps/);
-    assert.match(html, /Skip <strong>Transmute A to B<\/strong>/);
-    assert.match(html, /<span class="neg">Skip<\/span>/);
-    assert.match(html, /\+0\.05g/);
   });
 
   it("shows an operation outside the chain as a sourcing tree, not as an arbitrary-size summary row", async () => {

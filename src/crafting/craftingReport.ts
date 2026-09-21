@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { evaluateChain, optimizeChain, type ChainEvaluation, type ChainOptimum } from "./chain.js";
+import { evaluateChain, type ChainEvaluation } from "./chain.js";
 import { backfillHistory, trendFor, watchedItemIds, type Trend } from "./history.js";
 import { chainYieldSensitivity, type YieldSensitivity } from "./uncertainty.js";
 import { buildFlowGraph, type FlowGraph } from "./flow.js";
@@ -36,8 +36,6 @@ export interface CraftingTabModel {
   policies: Map<number, Policy>;
   /** The whole chain (buy the root's inputs, run it, then the other operations on what you hold); null without a root or a further step. */
   chain: ChainEvaluation | null;
-  /** Which of the chain's further steps are worth running (null: no chain, or it can't be decided - see optimizeChain). */
-  bestChain: ChainOptimum | null;
   /** Where today's price sits among the last week's, for what the chain buys and what you need (see history.ts). */
   trends: { itemId: number; role: "buy" | "need"; trend: Trend }[];
   /** How far the chain's saving moves if one measured yield is at the end of its ~95 % range (largest swing first). */
@@ -87,11 +85,6 @@ export async function buildCraftingModel(args: {
   const chain =
     chainRoot && chainOthers.length > 0
       ? evaluateChain({ root: chainRoot, rootExecutions: executions, others: chainOthers, books: prices.books, policies, nameOf })
-      : null;
-
-  const bestChain =
-    chainRoot && chainOthers.length > 0
-      ? optimizeChain({ root: chainRoot, rootExecutions: executions, others: chainOthers, books: prices.books, policies, nameOf })
       : null;
 
   const yieldSensitivity =
@@ -170,7 +163,6 @@ export async function buildCraftingModel(args: {
     sourcing,
     policies,
     chain,
-    bestChain,
     trends,
     yieldSensitivity,
     shownOperationIds,
