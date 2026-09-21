@@ -355,11 +355,18 @@ async function loadCraftingTab(): Promise<{ html: string; summary: string }> {
   try {
     db = openCraftingDb();
     const model = await buildCraftingModel({ db, fetchDump: fetchCommodityDump });
-    const parts = model.sourcing.map((s) =>
-      s.saving === null
-        ? `${s.economics.operation.name}: saving unknown`
-        : `${s.economics.operation.name}: ${gold(s.saving)} saved vs buying, over ${s.economics.executions} executions (${s.verdict})`,
-    );
+    const parts = model.sourcing
+      .filter((s) => model.shownOperationIds.has(s.economics.operation.operationId))
+      .map((s) =>
+        s.saving === null
+          ? `${s.economics.operation.name}: saving unknown`
+          : `${s.economics.operation.name}: ${gold(s.saving)} saved vs buying, over ${s.economics.executions} executions (${s.verdict})`,
+      );
+    if (model.chain?.saving != null) parts.unshift(`whole chain: ${gold(model.chain.saving)} saved vs buying`);
+    for (const p of model.procurements) {
+      const c = p.result.root.chosen;
+      parts.push(`sourcing ${p.units} x ${model.itemNames.get(p.itemId) ?? p.itemId}: ${c ? `${c.strategy === "BUY" ? "buy" : c.via} ${p.result.root.cost === null ? "" : gold(p.result.root.cost)}` : "no way to source it"}`);
+    }
     return {
       html: craftingTabHtml(model),
       summary: `Crafting (${model.priceSource} prices): ${parts.join("; ") || "no operations"}`,
