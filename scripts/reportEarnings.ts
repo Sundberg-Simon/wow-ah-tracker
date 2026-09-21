@@ -363,9 +363,10 @@ async function loadCraftingTab(): Promise<{ html: string; summary: string }> {
           : `${s.economics.operation.name}: ${gold(s.saving)} saved vs buying, over ${s.economics.executions} executions (${s.verdict})`,
       );
     if (model.chain?.saving != null) parts.unshift(`whole chain: ${gold(model.chain.saving)} saved vs buying`);
-    for (const p of model.procurements) {
-      const c = p.result.root.chosen;
-      parts.push(`sourcing ${p.units} x ${model.itemNames.get(p.itemId) ?? p.itemId}: ${c ? `${c.strategy === "BUY" ? "buy" : c.via} ${p.result.root.cost === null ? "" : gold(p.result.root.cost)}` : "no way to source it"}`);
+    for (const p of model.procurements.filter((q) => q.onlyFor === null)) {
+      const v = p.verdict;
+      const name = model.itemNames.get(p.itemId) ?? p.itemId;
+      parts.push(`${name} x${p.units}: ${v.makeable ? `worth crafting? ${v.decision === "craft" ? "YES" : v.decision === "buy" ? "NO" : "unknown"}` : "buy (nothing makes it)"}`);
     }
     return {
       html: craftingTabHtml(model),

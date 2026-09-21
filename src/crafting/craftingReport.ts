@@ -7,6 +7,7 @@ import { fractionToNumber } from "./fraction.js";
 import { listOperations, resolveOperation, type ResolvedOperation } from "./operations.js";
 import { getPolicies, type Policy } from "./policy.js";
 import { procure, type ProcureResult } from "./procure.js";
+import { decide, pointlessInputs, type ItemVerdict } from "./verdict.js";
 import { loadPrices } from "./prices.js";
 import { computeEconomics, type OperationEconomics } from "./profit.js";
 import { analyzeSourcing, type SourcingAnalysis } from "./sourcing.js";
@@ -36,7 +37,7 @@ export interface CraftingTabModel {
   /** The operations shown in the summary, flow and per-item table: the chain's, or every operation with known outputs when there is no chain. */
   shownOperationIds: Set<number>;
   /** For each needed item the shown operations don't make: how to end up with `units` of it, sourcing every input the cheapest way. */
-  procurements: { itemId: number; units: number; result: ProcureResult }[];
+  procurements: { itemId: number; units: number; result: ProcureResult; verdict: ItemVerdict; onlyFor: number | null }[];
   /** Names of every item involved, for text outside the flow graph. */
   itemNames: Map<number, string>;
   /** Only the operations that know what they yield; the others are "waiting for data". */
@@ -110,7 +111,32 @@ export async function buildCraftingModel(args: {
     .filter(([id, policy]) => policy === "need" && !shownOutputs.has(id))
     .map(([id]) => id)
     .sort((a, b) => a - b)
-    .map((itemId) => ({ itemId, units: SOURCING_UNITS, result: procure({ itemId, quantity: SOURCING_UNITS, operations, books: prices.books }) }));
+    .map((itemId) => {
+      const result = procure({ itemId, quantity: SOURCING_UNITS, operations, books: prices.books });
+      return { itemId, units: SOURCING_UNITS, result, verdict: decide(result.root, operations), onlyFor: null as number | null };
+    });
+  // An intermediate that only exists to feed something you would rather buy is not worth asking about at all - and
+  // neither is whatever only feeds THAT intermediate, all the way down.
+  const usersOf = (itemId: number) => operations.filter((op) => op.inputs.some((i) => i.itemId === itemId)).map((op) => op.name);
+  for (const p of procurements) {
+    const queue = [...pointlessInputs(p.verdict)];
+    const seen = new Set<number>();
+    while (queue.length > 0) {
+      const id = queue.pop() as number;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const q = procurements.find((x) => x.itemId === id);
+      if (!q) continue;
+      q.onlyFor = p.itemId;
+      const route = q.verdict.bestCraft;
+      const option = route ? q.result.root.options.find((o) => o.via === route.via) : undefined;
+      for (const input of option?.inputs ?? []) {
+        const makeable = input.options.some((o) => o.strategy !== "BUY");
+        const users = usersOf(input.itemId);
+        if (makeable && users.length > 0 && users.every((u) => u === route?.via)) queue.push(input.itemId);
+      }
+    }
+  }
   return {
     generatedAt: now,
     executions,
