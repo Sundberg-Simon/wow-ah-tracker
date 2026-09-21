@@ -358,7 +358,7 @@ async function loadCraftingTab(): Promise<{ html: string; summary: string }> {
     const parts = model.sourcing.map((s) =>
       s.saving === null
         ? `${s.economics.operation.name}: saving unknown`
-        : `${s.economics.operation.name}: ${gold(s.saving)} saved vs buying, per ${model.executions} executions (${s.verdict})`,
+        : `${s.economics.operation.name}: ${gold(s.saving)} saved vs buying, over ${s.economics.executions} executions (${s.verdict})`,
     );
     return {
       html: craftingTabHtml(model),

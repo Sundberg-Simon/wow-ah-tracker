@@ -458,9 +458,47 @@ describe("craftingTabHtml", () => {
     const chain = addOperation(db, { kind: "transmute", name: "A to B", inputs: [{ itemId: GEM_A, quantity: 1 }, { itemId: 3010, quantity: 1 }], fromRuns: {} });
     addOperationRun(db, { operationId: chain, executions: 10, outputs: [{ itemId: GEM_B, quantity: 9 }], performedOn: "2026-09-21" });
     const html = craftingTabHtml(await buildCraftingModel({ db, fetchDump: dump, executions: 10, now: new Date(T0) }));
+    // The chain gives the transmute 5 Gem A to work on (not the 10 the default would size it for), so it uses 5.
     assert.match(html, /made: 5 = 125% of the 4 listed/);
-    assert.match(html, /used: 10 = 250% of the 4 listed/);
-    assert.ok(!/15 = 375%/.test(html), "the two flows must not be added together");
+    assert.match(html, /used: 5 = 125% of the 4 listed/);
+    assert.ok(!/10 = 250%/.test(html), "the step is sized by what the chain provides, not by the default");
+    assert.ok(!/10 = 250%|15 = 375%/.test(html), "the two flows must not be added together");
+  });
+
+  it("shows the whole chain: what you buy, what you end up with, the saving, and each step's contribution", async () => {
+    const { db } = prospectFixture(); // 10 executions = 50 ore -> 5 Gem A, 1 Gem B
+    for (const [id, name] of [[ORE, "Test Ore"], [GEM_A, "Gem A"], [GEM_B, "Gem B"], [3010, "Lotus"]] as const) setItemName(db, id, name);
+    setPolicy(db, GEM_A, "need");
+    setPolicy(db, GEM_B, "need");
+    const t = addOperation(db, { kind: "transmute", name: "Transmute A to B", inputs: [{ itemId: GEM_A, quantity: 1 }, { itemId: 3010, quantity: 1 }], fromRuns: {} });
+    addOperationRun(db, { operationId: t, executions: 10, outputs: [{ itemId: GEM_B, quantity: 12 }], performedOn: "2026-09-21" });
+    const chainDump = async (): Promise<CommodityDump> => ({
+      lastModified: new Date(T0),
+      auctions: [
+        { item: { id: ORE }, quantity: 20, unit_price: 100 },
+        { item: { id: ORE }, quantity: 100, unit_price: 200 },
+        { item: { id: GEM_A }, quantity: 99, unit_price: 1_500 },
+        { item: { id: GEM_B }, quantity: 50, unit_price: 10_000 },
+        { item: { id: 3010 }, quantity: 99, unit_price: 500 },
+      ],
+    });
+    // Buy: ore 8 000 + 5 lotus 2 500 = 10 500. End with 5/1.. all A turned into 6 B (1.2 each) + the 1 B from the root = 7 B = 70 000.
+    // Saving 59 500 = 5.95g. Without the transmute: 5 A (7 500) + 1 B (10 000) - 8 000 = 9 500, so the step adds 50 000 = 5.00g.
+    const html = craftingTabHtml(await buildCraftingModel({ db, fetchDump: chainDump, executions: 10, now: new Date(T0) }));
+    assert.match(html, /The whole chain: Prospect Test Ore, then Transmute A to B/);
+    assert.match(html, /You buy/);
+    assert.match(html, /You end up with/);
+    assert.match(html, /What each step adds/);
+    assert.match(html, /cheaper than buying/);
+    assert.match(html, /\+5\.95g/);
+    assert.match(html, /\+5\.00g/);
+    assert.match(html, /Lotus/);
+    assert.match(html, /stays worth it until Test Ore costs about/);
+  });
+
+  it("has no chain section when there is no second operation with data", async () => {
+    const html = craftingTabHtml(await model(dump, [[GEM_A, "need"], [GEM_B, "ignore"]]));
+    assert.ok(!/The whole chain/.test(html));
   });
 
   it("says so when no operations exist", () => {

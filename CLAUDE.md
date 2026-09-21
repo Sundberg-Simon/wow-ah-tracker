@@ -719,6 +719,52 @@ eftersom.]
         faktiskt ger, och en transmutes input-kostnad för Sunstone borde vara
         min(köp, prospect) — det är lager 3 (rekursivt BUY vs CRAFT vs
         PROSPECT), inte byggt än.
+    - **Kedjan: hela flödet Kyparite → gems → transmutes (2026-09-21, byggt)**:
+      Simons egentliga fråga är inte "lönar transmute X" utan "vad kostar
+      3 000 Kyparite + de Golden Lotus som går åt, jämfört med vad det hade
+      kostat att köpa gemsen jag slutar med" — han säljer inget på AH förrän
+      mounts är klara, så allt värderas som undvikna inköp (`need`).
+      * **`chain.ts`**: `planChain` (förväntade värden, exakta bråk) köper rotens
+        inputs, håller dess outputs, och låter varje övrig operation förbruka
+        vad man håller av dess inputs (så många körningar som den knappaste
+        hållna inputen räcker till; inputs man inte håller — Golden Lotus —
+        köps). `evaluateChain` värderar: kostnad = inköpen uppför säljlistan,
+        värde = slutinnehavet efter policy (need = vad det kostar att köpa så
+        många), `saving = värde − kostnad`, break-even-pris på rotens input, och
+        varje stegs BIDRAG = kedjans besparing med steget minus utan det
+        (leave-one-out) — så ett förlustsbringande steg syns för sig (Sunstone →
+        Sun's Radiance var det i första körningen: input dyrare än gemet).
+        Operationer tillämpas i given ordning, en gång (uppströms först);
+        operationer utan data eller utan något att köra på hoppas över och
+        listas som varningar. CLI: `npm run crafting -- chain [--ore N]
+        [--root <op>]`; fliken har sektionen "The whole chain" överst.
+      * **Verifierat**: kedjans siffror från en generell, testad modell stämde
+        exakt med en oberoende engångsräkning från de loggade sessionerna
+        (kostnad, värde, besparing, break-even och alla stegbidrag). Utfallet
+        av transmutes visade sig vara >1 per craft (proc), därför loggas det
+        istället för att antas.
+      * **`cheapest` omskriven**: jämför varje väg direkt mot att köpa SAMMA antal
+        enheter (tidigare prissattes köp- och operationssidan i olika storlek
+        och gav nonsens som "prospecting är gratis"). Enkelroutes
+        (transmute/craft, en enda output) är jämförbara och de enda som
+        rekommenderas; gemensamma-produkt-routes (prospecting, många outputs)
+        visas för information men rekommenderas ALDRIG på egen hand, eftersom
+        priset på en enskild gem där beror på vad biprodukterna är värda —
+        den ärliga jämförelsen är hela kedjan. Enkelroutes storleksätts efter
+        `--units` (default 100), multi-output efter `--executions` (default
+        600 = en riktig batch). `verdict`: route / buy / unknown.
+      * **Flik-storlekar**: den första operationen storleksätts efter
+        `executions` (600 = 3 000 ore), varje vidare steg efter vad kedjan ger
+        det att jobba på (annars prissattes t.ex. 600 transmutes mot en tunn
+        marknad och "värdet" blev absurda 5–6-siffriga belopp).
+      * **Känd begränsning (ÖPPET)**: "vad det kostar att köpa så många" går
+        uppför säljlistan, och när mängden närmar sig marknadens djup kliver
+        den upp i skräplistningar (orimligt höga priser) — värdet blir då
+        uppblåst, flaggas bara som "lower bound" när marknaden inte räcker
+        till alls. En prisgräns (t.ex. ignorera listningar över X gånger
+        lägsta priset) vore nästa förfining. Kedjan antar dessutom att ALLA
+        hållna input-gems transmuteras; en "bara de lönsamma stegen"-plan
+        (hoppa över steg med negativt bidrag) är enkel att lägga till.
     - **Buy vs prospect / biprodukt-policy (2026-09-21, byggt)**: per item en
       policy i den LOKALA crafting-DB:n (`item_policy`, schema v4, `policy.ts`;
       CLI `policy set|list|clear`): **need** = används i egna crafts, värd =

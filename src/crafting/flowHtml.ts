@@ -1,4 +1,4 @@
-import { fractionToNumber } from "./fraction.js";
+import { fractionToNumber, type Fraction } from "./fraction.js";
 import { layerNodes, type FlowEdge, type FlowNode, type ItemNode, type OperationNode } from "./flow.js";
 import type { CraftingTabModel } from "./craftingReport.js";
 import { formatGold } from "./money.js";
@@ -45,6 +45,8 @@ export const CRAFTING_CSS = `
   .badge.sell { background: #3b82f633; color: #1d4ed8; }
   .badge.ignore { background: #88888833; color: #666; }
   table.gems td.gem-name { font-weight: 600; }
+  .chain-tables { display: flex; flex-wrap: wrap; gap: 1.5rem; }
+  .chain-tables > div { flex: 1 1 320px; }
 `;
 
 function badge(flag: string): string {
@@ -230,6 +232,59 @@ function gemTable(model: CraftingTabModel, nameOf: (id: number) => string): stri
     .join("");
 }
 
+/**
+ * The whole chain in one place: what you buy, what you end up with, and what buying the same end result would
+ * cost. This is the number that answers "is it worth doing all of it", with each step's contribution so a losing
+ * step is visible on its own.
+ */
+function chainSection(model: CraftingTabModel): string {
+  const e = model.chain;
+  if (!e || e.plan.steps.length < 2) return "";
+  const name = (id: number) => esc(model.itemNames.get(id) ?? String(id));
+  const qty = (f: Fraction) => units(fractionToNumber(f));
+  const [root, ...steps] = e.plan.steps;
+  const verdict =
+    e.saving === null ? `<span class="warn">unknown</span>` : e.saving > 0 ? `<span class="pos">cheaper than buying</span>` : `<span class="neg">dearer than buying</span>`;
+  const rootInput = root.operation.inputs.length === 1 ? name(root.operation.inputs[0].itemId) : null;
+
+  const buyRows = [...e.costLines]
+    .sort((a, b) => (b.cost ?? -1) - (a.cost ?? -1))
+    .map((c) => `<tr><td class="gem-name">${name(c.itemId)}</td><td class="num">${qty(c.quantity)}</td><td class="num">${goldOrUnknown(c.cost)}</td></tr>`)
+    .join("");
+  const holdRows = [...e.valueLines]
+    .sort((a, b) => (b.value ?? -1) - (a.value ?? -1))
+    .map(
+      (v) =>
+        `<tr class="${v.policy === "ignore" ? "muted" : ""}"><td class="gem-name">${name(v.itemId)}</td><td>${policyBadge(v.policy)}</td>` +
+        `<td class="num">${qty(v.quantity)}</td><td class="num">${goldOrUnknown(v.value)}${v.lowerBound ? ` <span class="warn" title="The market cannot supply this many; only the part that can be bought is counted.">lower bound</span>` : ""}</td></tr>`,
+    )
+    .join("");
+  const stepRows = e.contributions
+    .map((c) => {
+      const step = steps.find((s) => s.operation.operationId === c.operationId)!;
+      return `<tr><td class="gem-name">${esc(c.name)}</td><td class="num">${qty(step.executions)}</td><td class="num">${signedOrUnknown(c.contribution)}</td></tr>`;
+    })
+    .join("");
+
+  return (
+    `<h3>The whole chain: ${esc(root.operation.name)}, then ${steps.map((s) => esc(s.operation.name)).join(", ")}</h3>` +
+    `<p>Buy the inputs, run the first operation, then run the others on the gems you hold. It costs <strong>${goldOrUnknown(e.cost)}</strong>; ` +
+    `buying the same gems you end up with would cost <strong>${goldOrUnknown(e.value)}</strong>. ` +
+    `<strong>Saving ${signedOrUnknown(e.saving)}</strong> &mdash; ${verdict}.` +
+    `${e.breakEvenRootInputPrice !== null && rootInput ? ` It stays worth it until ${rootInput} costs about <strong>${formatGold(e.breakEvenRootInputPrice)}</strong> each.` : ""}</p>` +
+    `<div class="chain-tables">` +
+    `<div><h4>You buy</h4><table class="gems"><thead><tr><th>Item</th><th class="num">Units</th><th class="num">Cost</th></tr></thead><tbody>${buyRows}` +
+    `<tr><td class="gem-name">Total</td><td></td><td class="num"><strong>${goldOrUnknown(e.cost)}</strong></td></tr></tbody></table></div>` +
+    `<div><h4>You end up with</h4><table class="gems"><thead><tr><th>Item</th><th>You</th><th class="num">Units</th><th class="num">Worth to you</th></tr></thead><tbody>${holdRows}` +
+    `<tr><td class="gem-name">Total</td><td></td><td></td><td class="num"><strong>${goldOrUnknown(e.value)}</strong></td></tr></tbody></table></div>` +
+    `</div>` +
+    (stepRows === ""
+      ? ""
+      : `<h4>What each step adds compared with leaving it out</h4><table class="gems"><thead><tr><th>Step</th><th class="num">Crafts</th><th class="num">Adds</th></tr></thead><tbody>${stepRows}</tbody></table>` +
+        `<p class="muted">A negative number means that step costs you more than the gems it gives are worth: you would be better off keeping the gem it uses up.</p>`)
+  );
+}
+
 export function craftingTabHtml(model: CraftingTabModel, now: Date = model.generatedAt): string {
   if (model.economics.length === 0) {
     return `<h2>Crafting</h2><p class="muted">No operations defined yet. Add one with <code>npm run crafting -- op add ...</code>.</p>`;
@@ -285,10 +340,11 @@ export function craftingTabHtml(model: CraftingTabModel, now: Date = model.gener
   const feePercent = Math.round(fractionToNumber(model.economics[0].feeRate) * 10000) / 100;
 
   return `<h2>Crafting <span class="private">local only &mdash; from your own prospecting data</span></h2>
-  <p class="muted">${sourceText} Sized for ${units(model.executions)} executions of each operation.</p>
+  <p class="muted">${sourceText} ${model.chain ? `The first operation is sized for ${units(model.executions)} executions; each further step for what that gives it to work on.` : `Sized for ${units(model.executions)} executions of each operation.`}</p>
   ${errorText}
+  ${chainSection(model)}
   ${summaryTable(model)}
-  ${flow ? `<div class="flow">${flow}</div>` : ""}
+  ${flow ?`<div class="flow">${flow}</div>` : ""}
   ${gemTable(model, nameOfItem)}
   ${waitingSection(model)}
   <ul class="notes">

@@ -13,6 +13,7 @@ import {
 import { craftingDbPath, openCraftingDb } from "../src/crafting/db.js";
 import { fetchItemName, searchItemsByName, type StaticGet } from "../src/crafting/itemLookup.js";
 import { fetchCommodityDump } from "../src/crafting/blizzardMarket.js";
+import { evaluateChain, formatChain } from "../src/crafting/chain.js";
 import { formatCheapestCost, getCheapestCost } from "../src/crafting/cheapest.js";
 import { DEFAULT_EXECUTIONS } from "../src/crafting/craftingReport.js";
 import { describeItem, getItemName, listItems, resolveItem, setItemName } from "../src/crafting/items.js";
@@ -68,7 +69,10 @@ const USAGE = `WoW Crafting Optimizer - local data CLI (data-private/crafting.sq
   npm run crafting -- policy set <${POLICIES.join("|")}> <item> [<item> ...]
   npm run crafting -- policy list
   npm run crafting -- policy clear <item> [<item> ...]
-  npm run crafting -- cheapest <item> [--executions N]   buy it, or run an operation that yields it? (with the reasoning)
+  npm run crafting -- cheapest <item> [--units N] [--executions N]   buy it, or run an operation that yields it? (with the reasoning;
+                                                         --units = how many you want, default 100; --executions sizes multi-output routes, default 600)
+  npm run crafting -- chain [--ore N] [--root <op>]      buy N of the root operation's input (default 3000), run it, then
+                                                         every other operation on what you hold: what does it cost vs buying the result?
 
   npm run crafting -- backup create                   snapshot + verify (also runs automatically after every change)
   npm run crafting -- backup list
@@ -196,7 +200,9 @@ async function main(): Promise<void> {
       "from-prospecting": { type: "string" },
       source: { type: "string" },
       executions: { type: "string" },
+      units: { type: "string" },
       op: { type: "string" },
+      root: { type: "string" },
       got: { type: "string", multiple: true },
       "from-runs": { type: "boolean" },
       yes: { type: "boolean" },
@@ -353,6 +359,30 @@ async function main(): Promise<void> {
       const policies = [...getPolicies(db)].sort((a, b) => a[1].localeCompare(b[1]) || a[0] - b[0]);
       if (policies.length === 0) console.log("No policies set.");
       for (const [itemId, policy] of policies) console.log(`${policy.padEnd(7)} ${describeItem(db, itemId)}`);
+    } else if (group === "chain") {
+      const all = listOperations(db).map((o) => resolveOperation(db, o.operationId));
+      let rootId: number | null;
+      if (values.root) rootId = findOperationId(db, /^\d+$/.test(values.root) ? Number(values.root) : values.root);
+      else rootId = all.find((o) => o.kind === "prospect" && o.outputs.length > 0)?.operationId ?? null;
+      if (rootId === null) throw new ValidationError("no root operation: give --root <op>, or record prospecting batches first");
+      const root = all.find((o) => o.operationId === rootId)!;
+      if (root.inputs.length !== 1) throw new ValidationError(`${root.name} has ${root.inputs.length} inputs; chain --ore needs a root with exactly one`);
+      const perExecution = root.inputs[0].quantity;
+      const inputUnits = values.ore ? parseCount("--ore", values.ore) : 3000;
+      if (inputUnits % perExecution !== 0) throw new ValidationError(`--ore ${inputUnits} is not a multiple of ${perExecution} (what ${root.name} uses per execution)`);
+      const others = all.filter((o) => o.operationId !== rootId).sort((a, b) => a.operationId - b.operationId);
+      const ids = new Set<number>();
+      for (const op of all) {
+        for (const i of op.inputs) ids.add(i.itemId);
+        for (const o of op.outputs) ids.add(o.itemId);
+      }
+      const prices = await loadPrices(db, fetchCommodityDump, ids);
+      const nameOf = (id: number) => getItemName(db, id) ?? String(id);
+      console.log(`Prices: ${prices.source}${prices.observedNewest ? ` (Blizzard dump ${prices.observedNewest})` : ""}. Buying ${inputUnits.toLocaleString("en-US")} x ${nameOf(root.inputs[0].itemId)} = ${inputUnits / perExecution} executions of ${root.name}.`);
+      if (prices.error) console.warn(`  ${prices.error}`);
+      console.log("");
+      const evaluation = evaluateChain({ root, rootExecutions: inputUnits / perExecution, others, books: prices.books, policies: getPolicies(db), nameOf });
+      console.log(formatChain(evaluation, nameOf));
     } else if (group === "cheapest") {
       const target = resolveItem(db, [action, ...rest].filter(Boolean).join(" "));
       const executions = values.executions ? parseCount("--executions", values.executions) : DEFAULT_EXECUTIONS;
@@ -364,12 +394,18 @@ async function main(): Promise<void> {
       }
       const prices = await loadPrices(db, fetchCommodityDump, ids);
       const policies = getPolicies(db, ids);
-      const analyses = operations.map((op) => analyzeSourcing(computeEconomics(op, prices.books, { executions }), prices.books, policies));
-      console.log(
-        prices.source === "live"
-          ? `Prices: live (Blizzard dump ${prices.observedNewest}). Sized for ${executions} executions of each operation.`
-          : `Prices: ${prices.source}${prices.observedOldest ? ` (dump ${prices.observedOldest})` : ""}. Sized for ${executions} executions of each operation.`,
-      );
+      // A route that yields ONLY the wanted item is sized to give about --units of it (default 100), so it is compared
+      // with buying a realistic number of units. Routes that yield many things at once (prospecting) can't be sized
+      // per item, so they use a real batch (--executions, default 600).
+      const wantedUnits = values.units ? parseCount("--units", values.units) : 100;
+      const analyses = operations.map((op) => {
+        const yielded = op.outputs.find((o) => o.itemId === target);
+        const single = op.outputs.length === 1 && yielded !== undefined;
+        const runs = single ? Math.max(1, Math.ceil(wantedUnits / (yielded.expected.num / yielded.expected.den))) : executions;
+        return analyzeSourcing(computeEconomics(op, prices.books, { executions: runs }), prices.books, policies);
+      });
+      const source = prices.source === "live" ? `live (Blizzard dump ${prices.observedNewest})` : `${prices.source}${prices.observedOldest ? ` (dump ${prices.observedOldest})` : ""}`;
+      console.log(`Prices: ${source}. Routes that yield only this item are sized for about ${wantedUnits} units; multi-output routes (prospecting) for ${executions} executions.`);
       if (prices.error) console.warn(`  ${prices.error}`);
       console.log("");
       console.log(formatCheapestCost(getCheapestCost({ itemId: target, analyses, books: prices.books, nameOf: (id) => getItemName(db, id) ?? String(id) })));

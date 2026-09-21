@@ -1,8 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
+import { evaluateChain, type ChainEvaluation } from "./chain.js";
 import { buildFlowGraph, type FlowGraph } from "./flow.js";
 import { getItemName } from "./items.js";
 import type { CommodityDumpFetcher } from "./market.js";
-import { listOperations, resolveOperation } from "./operations.js";
+import { fractionToNumber } from "./fraction.js";
+import { listOperations, resolveOperation, type ResolvedOperation } from "./operations.js";
 import { getPolicies, type Policy } from "./policy.js";
 import { loadPrices } from "./prices.js";
 import { computeEconomics, type OperationEconomics } from "./profit.js";
@@ -25,6 +27,8 @@ export interface CraftingTabModel {
   /** Buy-vs-run analysis per operation, same order as `economics`. */
   sourcing: SourcingAnalysis[];
   policies: Map<number, Policy>;
+  /** The whole chain (buy the root's inputs, run it, then the other operations on what you hold); null without a root or a further step. */
+  chain: ChainEvaluation | null;
   /** Names of every item involved, for text outside the flow graph. */
   itemNames: Map<number, string>;
   /** Only the operations that know what they yield; the others are "waiting for data". */
@@ -56,14 +60,32 @@ export async function buildCraftingModel(args: {
 
   const prices = await loadPrices(db, fetchDump, itemIds, now);
   const policies = getPolicies(db, itemIds);
-  const economics = operations.map((op) => computeEconomics(op, prices.books, { executions }));
-  const sourcing = economics.map((e) => analyzeSourcing(e, prices.books, policies));
-  // Operations that don't know what they yield yet (no logged runs / batches) stay out of the flow: their
-  // "what if I ran it 600 times" figures would only be noise. They are listed separately as waiting for data.
-  const ready = economics.map((_, i) => i).filter((i) => economics[i].operation.outputs.length > 0);
   const nameOf = (id: number) => getItemName(db, id) ?? String(id);
   const itemNames = new Map<number, string>();
   for (const id of itemIds) itemNames.set(id, nameOf(id));
+
+  // The chain: the first operation that knows what it yields and is a prospect is the root; every other
+  // operation with data is applied to what it gives you, in creation order.
+  const known = operations.filter((op) => op.outputs.length > 0);
+  const chainRoot = known.find((op) => op.kind === "prospect");
+  const chainOthers = chainRoot ? known.filter((op) => op !== chainRoot).sort((a, b) => a.operationId - b.operationId) : [];
+  const chain =
+    chainRoot && chainOthers.length > 0
+      ? evaluateChain({ root: chainRoot, rootExecutions: executions, others: chainOthers, books: prices.books, policies, nameOf })
+      : null;
+
+  // Size each operation realistically: the root for `executions`, every further step for what the chain gives it
+  // to work on (you do not transmute 600 gems you don't have - and pricing that many against a thin market only
+  // climbs into junk listings). Operations outside the chain keep the default.
+  const executionsFor = (op: ResolvedOperation): number => {
+    const step = chain?.plan.steps.find((s) => s.operation.operationId === op.operationId);
+    return step ? Math.max(1, Math.round(fractionToNumber(step.executions))) : executions;
+  };
+  const economics = operations.map((op) => computeEconomics(op, prices.books, { executions: executionsFor(op) }));
+  const sourcing = economics.map((e) => analyzeSourcing(e, prices.books, policies));
+  // Operations that don't know what they yield yet (no logged runs / batches) stay out of the flow: their
+  // "what if I ran it N times" figures would only be noise. They are listed separately as waiting for data.
+  const ready = economics.map((_, i) => i).filter((i) => economics[i].operation.outputs.length > 0);
   return {
     generatedAt: now,
     executions,
@@ -74,6 +96,7 @@ export async function buildCraftingModel(args: {
     economics,
     sourcing,
     policies,
+    chain,
     itemNames,
     graph: buildFlowGraph(ready.map((i) => economics[i]), nameOf, ready.map((i) => sourcing[i])),
   };

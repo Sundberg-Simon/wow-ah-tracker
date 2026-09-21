@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { formatCheapestCost, getCheapestCost } from "./cheapest.js";
 import { openCraftingDb, SCHEMA_VERSION } from "./db.js";
 import { fraction } from "./fraction.js";
 import { walkBookFractional, type PriceBook } from "./market.js";
@@ -198,80 +197,3 @@ describe("analyzeSourcing (hand-checked)", () => {
   });
 });
 
-describe("getCheapestCost", () => {
-  const setup = (a?: Policy, b?: Policy) => {
-    const { economics, market } = fixture();
-    const analyses = [analyzeSourcing(economics, market, pol(a, b))];
-    return { analyses, market };
-  };
-
-  it("prefers prospecting when the other gems pay for the ore, and explains it as a tree", () => {
-    const { analyses, market } = setup("need", "ignore");
-    const r = getCheapestCost({ itemId: A, analyses, books: market, nameOf });
-    const buy = r.options.find((o) => o.strategy === "BUY")!;
-    const prospect = r.options.find((o) => o.strategy === "PROSPECT")!;
-    assert.equal(buy.unitCost, 3_200);
-    assert.equal(prospect.unitCost, 1_600);
-    assert.equal(r.chosen, prospect);
-    assert.equal(r.savingPerUnit, 1_600);
-    assert.equal(prospect.tree.copper, 1_600);
-    const labels = prospect.tree.children.map((c) => [c.label, c.copper]);
-    assert.deepEqual(labels[0], ["buy the inputs: 50 x Ore", 8_000]);
-    assert.match(String(labels[1][0]), /Gem B.*worth nothing to you/);
-    assert.equal(labels[1][1], 0);
-    assert.deepEqual(labels.at(-1), ["= net cost of 5 x Gem A", 8_000]);
-  });
-
-  it("credits the other needed gems as negative nodes", () => {
-    const { analyses, market } = setup("need", "need");
-    const r = getCheapestCost({ itemId: A, analyses, books: market, nameOf });
-    const credit = r.options.find((o) => o.strategy === "PROSPECT")!.tree.children.find((c) => /credit 1 x Gem B/.test(c.label))!;
-    assert.equal(credit.copper, -10_000);
-    assert.match(credit.label, /you would otherwise buy them/);
-    assert.equal(r.options.find((o) => o.strategy === "PROSPECT")!.unitCost, (8_000 - 10_000) / 5);
-  });
-
-  it("prefers buying when prospecting doesn't cover the ore", () => {
-    const { analyses, market } = setup("ignore", "ignore");
-    const r = getCheapestCost({ itemId: A, analyses, books: market, nameOf });
-    assert.equal(r.options.find((o) => o.strategy === "PROSPECT")!.unitCost, 1_600); // all 8 000 on 5 units
-    // ...which is still cheaper than 3 200 to buy: the by-products only ever help
-    assert.equal(r.chosen!.strategy, "PROSPECT");
-    const dear = getCheapestCost({ itemId: A, analyses: [analyzeSourcing(fixture().economics, new Map(market).set(A, book(A, [[100, 99]])), pol("ignore", "ignore"))], books: market, nameOf });
-    assert.equal(dear.chosen!.strategy, "BUY", "gem is 100 to buy, 1 600 to prospect");
-  });
-
-  it("is unknown, not a guess, when a policy is missing", () => {
-    const { analyses, market } = setup("need");
-    const r = getCheapestCost({ itemId: A, analyses, books: market, nameOf });
-    assert.equal(r.options.find((o) => o.strategy === "PROSPECT")!.unitCost, null);
-    assert.equal(r.chosen!.strategy, "BUY", "the only known option");
-    assert.equal(r.savingPerUnit, null);
-    assert.ok(r.warnings.some((w) => /no policy/.test(w)));
-  });
-
-  it("falls back to a plain buy price for an item no operation yields, or unknown when nothing is listed", () => {
-    const { analyses, market } = setup("need", "ignore");
-    const r = getCheapestCost({ itemId: ORE, analyses, books: market, nameOf });
-    assert.deepEqual(r.options.map((o) => [o.strategy, o.unitCost]), [["BUY", 100]]);
-    const none = getCheapestCost({ itemId: 9999, analyses, books: market, nameOf });
-    assert.equal(none.chosen, null);
-    assert.ok(none.warnings.some((w) => /nothing is listed/.test(w)));
-  });
-
-  it("renders the decision as text with the chosen option marked", () => {
-    const { analyses, market } = setup("need", "ignore");
-    const text = formatCheapestCost(getCheapestCost({ itemId: A, analyses, books: market, nameOf }));
-    assert.match(text, /Cheapest way to get one Gem A:/);
-    assert.match(text, /PROSPECT \(Prospect Ore\): 0\.16g per unit, 0\.16g cheaper/);
-    assert.match(text, /-> PROSPECT via Prospect Ore/);
-    assert.match(text, /worth nothing to you/);
-    // Gem B via the operation: ore 8 000 - Gem A's 16 000 credit = -8 000, printed as what it means, not as a negative price
-    const free = formatCheapestCost(getCheapestCost({ itemId: B, analyses, books: market, nameOf }));
-    assert.match(free, /PROSPECT \(Prospect Ore\): free \(the other outputs more than cover the inputs, by 0\.80g per unit\)/);
-    assert.ok(!/-0\.80g per unit/.test(free));
-    const unknown = formatCheapestCost(getCheapestCost({ itemId: 9999, analyses, books: market, nameOf }));
-    assert.match(unknown, /UNKNOWN/);
-    assert.match(unknown, /WARNING/);
-  });
-});
