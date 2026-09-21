@@ -872,6 +872,31 @@ eftersom.]
         billigare, medan Living Steel förblev "köp" (~11 % dyrare att crafta,
         drivet av Spirit of Harmony ~60 % av kostnaden). Tolka det som ett
         läge, inte en dom; break-even-priserna i verdiktet är det stabila.
+    - **Truegold (2026-09-21, uppsatt)**: nästa mat efter gems och Living Steel;
+      Truegold (58480) är en råvara i Vial of the Sands (12 st per Vial), så det
+      hör direkt ihop med slutmålet. Verifierat mot Blizzards API (Cataclysm-
+      yrkena skannade, strukturerade reagens): `Transmute: Truegold` (Alchemy,
+      recept 22014) = 3 Pyrium Bar (51950) + 10 Volatile Fire (52325) + 10
+      Volatile Air (52328) + 10 Volatile Water (52326) → 1 Truegold (nominellt;
+      verkligt utfall loggas). `Smelt Pyrite` (Mining, 21625) = 2 Pyrite Ore
+      (52183) → 1 Pyrium Bar. Volatile-materialen har INGET recept i
+      Cataclysm-tierna (insamlade/droppade) och behandlas som köp-bara.
+      * **Medvetet EJ uppsatt**: `Transmute: Pyrium Bar` (Alchemy, 22017;
+        1 Elementium Bar + 1 Volatile Earth → 3 bars enligt API:t) har en daglig
+        cooldown (Simon bekräftat) och kan inte användas för massproduktion —
+        samma regel som Living Steel-transmuten. Ledtråd som fångade det: en
+        3-för-1-transmute finns men bar-priset är ändå högt. API-texten nämner
+        ingen cooldown, så en tyst beskrivning bevisar ingenting; fråga Simon.
+      * Operationerna, items och `need`-policyn på Truegold och Pyrium Bar ligger
+        i den lokala crafting-DB:n (inte i repot); Transmute: Truegold har sitt
+        utfall från loggade körningar (`--from-runs`), Smelt Pyrite är fast.
+      * Vial of the Sands' övriga reagens är kartlagda men inte inlagda:
+        Pyrium-Laced Crystalline Vial (65892) och Sands of Time (65893) saknar
+        recept i Cataclysm-tierna (köp-bara, och de allra dyraste posterna);
+        Flask of the Winds (21994) och Flask of Titanic Strength (21995) har
+        recept med Volatile Life/Whiptail/Azshara's Veil resp. Cinderbloom;
+        Deepstone Oil (21983) = 1 Albino Cavefish → 0,5–2,5 (varierar, kräver
+        loggade körningar). Simon matar in Vial-receptet själv, en gång.
     - **Bästa plan / "bara de lönsamma stegen" — byggd och SEDAN BORTTAGEN
       (2026-09-21)**: en `optimizeChain` som provade varje kombination av
       kedjans steg och rekommenderade att hoppa över förlustbringande
