@@ -778,7 +778,8 @@ eftersom.]
         `chain` (framåt) och `procure` (bakåt) är separata verktyg — en
         målstyrd plan för hela Living Steel-kedjan från råmaterial vore nästa
         steg; `chain` kräver att operationer skapats uppströms först;
-        prisgränsen mot skräplistningar (se kedjeavsnittet) gäller även här.
+        prisgränsen mot skräplistningar (se kedjeavsnittet) är införd och
+        gäller även här.
     - **Kedjan: hela flödet Kyparite → gems → transmutes (2026-09-21, byggt)**:
       Simons egentliga fråga är inte "lönar transmute X" utan "vad kostar
       3 000 Kyparite + de Golden Lotus som går åt, jämfört med vad det hade
@@ -817,14 +818,52 @@ eftersom.]
         `executions` (600 = 3 000 ore), varje vidare steg efter vad kedjan ger
         det att jobba på (annars prissattes t.ex. 600 transmutes mot en tunn
         marknad och "värdet" blev absurda 5–6-siffriga belopp).
-      * **Känd begränsning (ÖPPET)**: "vad det kostar att köpa så många" går
-        uppför säljlistan, och när mängden närmar sig marknadens djup kliver
-        den upp i skräplistningar (orimligt höga priser) — värdet blir då
-        uppblåst, flaggas bara som "lower bound" när marknaden inte räcker
-        till alls. En prisgräns (t.ex. ignorera listningar över X gånger
-        lägsta priset) vore nästa förfining. Kedjan antar dessutom att ALLA
-        hållna input-gems transmuteras; en "bara de lönsamma stegen"-plan
+      * **Skräplistningar — LÖST 2026-09-21 (`MAX_PRICE_MULTIPLE` i
+        `market.ts`)**: prislistorna slutar ofta i en handfull platshållar-
+        listningar (200 g, ~2 000 g, ~50 000 g mot ett verkligt pris på ~12 g).
+        När utbudet krympte mellan två dumpar räckte de riktiga listningarna
+        inte till, "köp så många" klättrade upp i skräpet och rapporten visade
+        en helkedjebesparing på hundratusentals guld (verkligt: ett par
+        tusen, alltså en faktor ~300 fel). Nu räknas bara
+        listningar upp till 3 × det gängse priset (priset där de första ~5
+        enheterna nås, inte den enskilt billigaste, så en låg utstickare inte
+        krymper taket): `listedQuantity` och `walkBook` använder taket, resten
+        är ett SHORTFALL ("marknaden kan inte leverera så många till rimligt
+        pris") → värdet blir en flaggad NEDRE GRÄNS, inköpet blir okänt,
+        `procure` ser köp som ej genomförbart. Gäller överallt (chain,
+        procure, sourcing, tunn-marknad-flaggan). Kedjan antar dessutom att
+        ALLA hållna input-gems transmuteras; en "bara de lönsamma stegen"-plan
         (hoppa över steg med negativt bidrag) är enkel att lägga till.
+    - **"Är det värt att crafta?" — verdiktet, uppifrån och ner (2026-09-21,
+      byggt)**: Simons fråga är beslutsvänd: FÖRST "är Living Steel värt att
+      crafta?", och BARA om ja: "är Trillium Bar värt att crafta, och hur?" —
+      en mellanprodukt vill man ha för slutproduktens skull, så köper man
+      slutprodukten finns det 0 mening med att crafta mellanprodukten (åtminstone
+      tills något nytt recept använder den).
+      * **`verdict.ts`**: `decide()` gör om procure-trädet till ett ja/nej per
+        nod: köp eller crafta, hur mycket billigare/dyrare (kr och %), VAD SOM
+        SKULLE VÄNDA DET (priset på itemet själv och på de två största
+        inputs vid vilket craft = köp; linjära uppskattningar med allt annat
+        fixt — avsedda att visa hur knapp det är, inte exakta), och rekursiv
+        "och hur?" för inputs BARA längs den valda craft-vägen. Är svaret
+        "köp" listas mellanprodukterna som onödiga (`notNeeded`), med vilka
+        andra operationer som använder dem: används de av något annat är det
+        en annan sak ("kan ändå vara värt att ha för det").
+      * **`describeVerdict`** ger orden en gång, så CLI och rapport aldrig
+        kan säga emot varandra. CLI: `npm run crafting -- worth <item>
+        [--units N]`. Fliken: sourcing-sektionen har "Worth crafting? YES/NO"
+        överst i varje träd.
+      * **Transitivt** (`pointlessInputs` + `onlyFor` i rapporten): en
+        mellanprodukt som bara finns för att mata något Simon hellre köper
+        FRÅGAS INTE ALLS i fliken ("Not asked: it is only needed to make X"),
+        och det gäller även det som bara matar den mellanprodukten, hela
+        vägen ner (Trillium Bar OCH Ghost Iron Bar när Living Steel köps).
+        Slutprodukterna visas först.
+      * **Beslutet är prisberoende och nära**: med två dumpar två timmar isär
+        vände Trillium Bar-transmuten från 1,5 % dyrare än köp till 7,7 %
+        billigare, medan Living Steel förblev "köp" (~11 % dyrare att crafta,
+        drivet av Spirit of Harmony ~60 % av kostnaden). Tolka det som ett
+        läge, inte en dom; break-even-priserna i verdiktet är det stabila.
     - **Buy vs prospect / biprodukt-policy (2026-09-21, byggt)**: per item en
       policy i den LOKALA crafting-DB:n (`item_policy`, schema v4, `policy.ts`;
       CLI `policy set|list|clear`): **need** = används i egna crafts, värd =

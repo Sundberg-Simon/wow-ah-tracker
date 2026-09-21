@@ -18,6 +18,7 @@ import { getCheapestCost } from "../src/crafting/cheapest.js";
 import { fractionToNumber } from "../src/crafting/fraction.js";
 import { formatGold } from "../src/crafting/money.js";
 import { formatProcure, procure } from "../src/crafting/procure.js";
+import { decide, formatVerdict } from "../src/crafting/verdict.js";
 import { DEFAULT_EXECUTIONS } from "../src/crafting/craftingReport.js";
 import { describeItem, getItemName, listItems, resolveItem, setItemName } from "../src/crafting/items.js";
 import { clearPolicy, getPolicies, POLICIES, setPolicy } from "../src/crafting/policy.js";
@@ -72,6 +73,8 @@ const USAGE = `WoW Crafting Optimizer - local data CLI (data-private/crafting.sq
   npm run crafting -- policy set <${POLICIES.join("|")}> <item> [<item> ...]
   npm run crafting -- policy list
   npm run crafting -- policy clear <item> [<item> ...]
+  npm run crafting -- worth <item> [--units N]           "is it worth crafting?" yes/no by how much, what would flip it, and - only
+                                                         if yes - the same question for each input ("and how?"). Default 100 units.
   npm run crafting -- cheapest <item> [--units N] [--executions N]   cheapest way to end up with N of it (default 100): buy it or
                                                          make it, and every input bought or made the same way, all the way down.
                                                          --executions sizes prospecting-type routes (default 600), shown for information
@@ -102,6 +105,17 @@ them from runs of THIS operation that you log with "run add" (unknown until you 
 complete record, so list every item you got, with 0 for a result you did not get).
 --date defaults to today. Names must be registered with "item add"; an ambiguous
 name (same name, several ids) is refused - use the id.`;
+
+/** Every operation (with what it yields, as far as is known) and current prices for everything involved plus `target`. */
+async function loadWorld(db: DatabaseSync, target: number) {
+  const operations = listOperations(db).map((o) => resolveOperation(db, o.operationId));
+  const ids = new Set<number>([target]);
+  for (const op of operations) {
+    for (const i of op.inputs) ids.add(i.itemId);
+    for (const o of op.outputs) ids.add(o.itemId);
+  }
+  return { operations, prices: await loadPrices(db, fetchCommodityDump, ids) };
+}
 
 // Blizzard static-namespace GET via the sync pipeline's OAuth client (only touched by item find/fetch).
 const staticGet: StaticGet = (path, params) => blizzardGet(path, { namespace: "static", params });
@@ -387,16 +401,26 @@ async function main(): Promise<void> {
       console.log("");
       const evaluation = evaluateChain({ root, rootExecutions: inputUnits / perExecution, others, books: prices.books, policies: getPolicies(db), nameOf });
       console.log(formatChain(evaluation, nameOf));
+    } else if (group === "worth") {
+      const target = resolveItem(db, [action, ...rest].filter(Boolean).join(" "));
+      const wantedUnits = values.units ? parseCount("--units", values.units) : 100;
+      const { operations, prices } = await loadWorld(db, target);
+      const nameOf = (id: number) => getItemName(db, id) ?? String(id);
+      const source = prices.source === "live" ? `live (Blizzard dump ${prices.observedNewest})` : `${prices.source}${prices.observedOldest ? ` (dump ${prices.observedOldest})` : ""}`;
+      console.log(`Prices: ${source}.`);
+      if (prices.error) console.warn(`  ${prices.error}`);
+      console.log("");
+      const root = procure({ itemId: target, quantity: wantedUnits, operations, books: prices.books }).root;
+      console.log(formatVerdict(decide(root, operations), nameOf));
     } else if (group === "cheapest") {
       const target = resolveItem(db, [action, ...rest].filter(Boolean).join(" "));
       const executions = values.executions ? parseCount("--executions", values.executions) : DEFAULT_EXECUTIONS;
-      const operations = listOperations(db).map((o) => resolveOperation(db, o.operationId));
+      const { operations, prices } = await loadWorld(db, target);
       const ids = new Set<number>([target]);
       for (const op of operations) {
         for (const i of op.inputs) ids.add(i.itemId);
         for (const o of op.outputs) ids.add(o.itemId);
       }
-      const prices = await loadPrices(db, fetchCommodityDump, ids);
       const policies = getPolicies(db, ids);
       const wantedUnits = values.units ? parseCount("--units", values.units) : 100;
       const nameOf = (id: number) => getItemName(db, id) ?? String(id);

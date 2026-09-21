@@ -4,6 +4,7 @@ import type { CraftingTabModel } from "./craftingReport.js";
 import { formatGold } from "./money.js";
 import type { ResolvedOperation } from "./operations.js";
 import { unitCostOf, type ProcureNode } from "./procure.js";
+import { describeVerdict, type ItemVerdict } from "./verdict.js";
 import type { GemSourcing, SourcingAnalysis } from "./sourcing.js";
 
 // HTML for the earnings report's "Crafting" tab. Pure string building over a
@@ -256,6 +257,18 @@ function procureNodeHtml(node: ProcureNode, nameOf: (id: number) => string): str
   );
 }
 
+/** The answer to "is it worth crafting?" for one needed item, in the same words as the command line. */
+function worthCraftingHtml(v: ItemVerdict, nameOf: (id: number) => string): string {
+  if (!v.makeable) return `<p class="verdict"><strong>Nothing you have set up makes it</strong> &mdash; buy it.</p>`;
+  const d = describeVerdict(v, nameOf);
+  const cls = d.answer === "YES" ? "pos" : d.answer === "NO" ? "neg" : "warn";
+  return (
+    `<p class="verdict"><strong>Worth crafting? <span class="${cls}">${d.answer}</span></strong> &mdash; ${esc(d.why)}.` +
+    `${d.flips ? ` <span class="muted">What would flip it: ${esc(d.flips)}.</span>` : ""}</p>` +
+    d.notNeeded.map((line) => `<p class="muted">${esc(line)}</p>`).join("")
+  );
+}
+
 /**
  * Needed items the chain doesn't make: for each, the cheapest way to end up with a set number of them, where every
  * input of every way of making it is again bought or made, whichever is cheaper, all the way down.
@@ -263,8 +276,14 @@ function procureNodeHtml(node: ProcureNode, nameOf: (id: number) => string): str
 function sourcingSection(model: CraftingTabModel): string {
   if (model.procurements.length === 0) return "";
   const nameOf = (id: number) => model.itemNames.get(id) ?? String(id);
-  const trees = model.procurements
-    .map((p) => `<h4>${units(p.units)} x ${esc(nameOf(p.itemId))}</h4><ul class="procure">${procureNodeHtml(p.result.root, nameOf)}</ul>`)
+  // The end products first: an intermediate that only exists to feed something you'd rather buy is not asked about.
+  const trees = [...model.procurements]
+    .sort((a, b) => Number(a.onlyFor !== null) - Number(b.onlyFor !== null))
+    .map((p) =>
+      p.onlyFor !== null
+        ? `<h4>${esc(nameOf(p.itemId))}</h4><p class="muted">Not asked: it is only needed to make ${esc(nameOf(p.onlyFor))}, and you would buy that instead. Revisit if you add a recipe that uses it.</p>`
+        : `<h4>${units(p.units)} x ${esc(nameOf(p.itemId))}</h4>${worthCraftingHtml(p.verdict, nameOf)}<ul class="procure">${procureNodeHtml(p.result.root, nameOf)}</ul>`,
+    )
     .join("");
   const noData = [...new Set(model.procurements.flatMap((p) => p.result.noData))];
   const excluded = model.procurements.flatMap((p) => p.result.excluded);

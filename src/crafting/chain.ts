@@ -248,7 +248,9 @@ export function evaluateChain(args: {
   }
 
   const warnings = [...root.warnings, ...totals.warnings];
-  for (const s of plan.skipped) if (s.reason !== "left out on purpose") warnings.push(`${s.name} is not part of the chain: ${s.reason}`);
+  // Only an operation that could have been part of the chain but has no data yet is worth a warning; one that simply
+  // has nothing to run on is unrelated (it is still listed as skipped in the text).
+  for (const s of plan.skipped) if (s.reason.startsWith("no data")) warnings.push(`${s.name} is not part of the chain: ${s.reason}`);
   return { plan, ...totals, contributions, breakEvenRootInputPrice: breakEven, warnings };
 }
 

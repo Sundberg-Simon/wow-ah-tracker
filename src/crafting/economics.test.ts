@@ -13,6 +13,7 @@ import {
   latestBooks,
   listedQuantity,
   minPrice,
+  priceCeiling,
   saveBooks,
   walkBook,
   type CommodityDump,
@@ -124,6 +125,37 @@ describe("market books", () => {
     assert.deepEqual(walkBook(b, 40), { filled: 35, shortfall: 5, cost: 25 * 100 + 10 * 200 }, "partial fill reports the shortfall");
     assert.deepEqual(walkBook(book(ORE, []), 3), { filled: 0, shortfall: 3, cost: 0 });
     assert.deepEqual(walkBook(undefined, 3), { filled: 0, shortfall: 3, cost: 0 });
+  });
+
+  describe("price ceiling: placeholder listings are not part of the market", () => {
+    // 102 real units at 1 156-1 230, then junk: 1 at 20 010, 10 at 199 900, 5 at 4 999 994 (copper, like a real ladder tail)
+    const ruby = () => book(ORE, [[1_156, 14], [1_157, 42], [1_158, 9], [1_169, 31], [1_200, 2], [1_230, 4], [20_010, 1], [199_900, 10], [4_999_994, 5]]);
+
+    it("sets the ceiling at 3x the going price (the price where the first few units are reached)", () => {
+      assert.equal(priceCeiling(ruby()), 3_468); // 1 156 x 3: 14 units are available at the cheapest price
+      assert.equal(priceCeiling(book(ORE, [[10, 1], [1_000, 1], [1_100, 1], [1_100, 5]])), 3_300, "a single low-ball listing doesn't shrink it: the 5th unit sets it");
+      assert.equal(priceCeiling(book(ORE, [[100, 2]])), 300, "a tiny book uses its last level");
+      assert.equal(priceCeiling(book(ORE, [])), null);
+      assert.equal(priceCeiling(undefined), null);
+    });
+
+    it("counts only believable listings as listed", () => {
+      assert.equal(listedQuantity(ruby()), 102);
+    });
+
+    it("stops the walk at the ceiling: the rest is a shortfall, not a 5 000g price", () => {
+      assert.deepEqual(walkBook(ruby(), 100), { filled: 100, shortfall: 0, cost: 14 * 1_156 + 42 * 1_157 + 9 * 1_158 + 31 * 1_169 + 2 * 1_200 + 2 * 1_230 });
+      const big = walkBook(ruby(), 212); // the situation that produced 270 000g: more wanted than really exists
+      assert.equal(big.filled, 102);
+      assert.equal(big.shortfall, 110);
+      assert.ok(big.cost < 150_000, "priced from the real listings only");
+    });
+
+    it("leaves an ordinary ladder alone, however steep it is within 3x", () => {
+      const ladder = book(ORE, [[100, 20], [200, 100], [290, 10]]);
+      assert.equal(listedQuantity(ladder), 130);
+      assert.deepEqual(walkBook(ladder, 130), { filled: 130, shortfall: 0, cost: 20 * 100 + 100 * 200 + 10 * 290 });
+    });
   });
 
   it("stores insert-only history, idempotent per dump, and reads back the latest", () => {
@@ -528,9 +560,51 @@ describe("craftingTabHtml", () => {
     assert.match(html, /Sourcing: buy it or make it/);
     assert.match(html, /100 x Bar<\/strong>: craft via Smelt Thing \(100 times\) = <strong>2\.00g<\/strong>/);
     assert.match(html, /instead of: buy 2\.50g/);
+    // and the verdict on top of the tree: crafting (2.00g) costs 20% less than buying (2.50g)
+    assert.match(html, /Worth crafting\? <span class="pos">YES<\/span><\/strong> &mdash; crafting costs 20% less than buying \(saves 0\.50g\)/);
+    assert.match(html, /What would flip it: Bar price 0\.03g -&gt; 0\.02g/);
     assert.match(html, /200 x Raw<\/strong>: buy on the auction house = <strong>2\.00g<\/strong>/);
     assert.match(html, /Not considered, because they have no logged data yet.*Waiting T/);
     assert.ok(!/<h4>[\d,.]+ x Gem B<\/h4>/.test(html), "items the chain makes are not repeated as sourcing trees");
+  });
+
+  it("doesn't ask whether an intermediate is worth crafting when the item it feeds is better bought - all the way down", async () => {
+    const RAW = 8001;
+    const MID = 8002; // intermediate
+    const TOP = 8003; // end product
+    const BASE = 8004; // deeper intermediate
+    const { db } = prospectFixture();
+    for (const [id, name] of [[ORE, "Test Ore"], [GEM_A, "Gem A"], [GEM_B, "Gem B"], [3010, "Lotus"], [RAW, "Raw"], [MID, "Mid"], [TOP, "Top"], [BASE, "Base"]] as const) setItemName(db, id, name);
+    for (const id of [GEM_A, GEM_B, MID, TOP, BASE]) setPolicy(db, id, "need");
+    const t = addOperation(db, { kind: "transmute", name: "Transmute A to B", inputs: [{ itemId: GEM_A, quantity: 1 }, { itemId: 3010, quantity: 1 }], fromRuns: {} });
+    addOperationRun(db, { operationId: t, executions: 10, outputs: [{ itemId: GEM_B, quantity: 12 }], performedOn: "2026-09-21" });
+    addOperation(db, { kind: "craft", name: "Make Base", inputs: [{ itemId: RAW, quantity: 2 }], outputs: [{ itemId: BASE, expected: fraction(1, 1) }] }); // 200 each, buying is 250
+    addOperation(db, { kind: "craft", name: "Make Mid", inputs: [{ itemId: BASE, quantity: 2 }], outputs: [{ itemId: MID, expected: fraction(1, 1) }] }); // 400 each, buying is 500
+    addOperation(db, { kind: "craft", name: "Make Top", inputs: [{ itemId: MID, quantity: 2 }], outputs: [{ itemId: TOP, expected: fraction(1, 1) }] }); // 800 each, buying is 600
+    const dumpAll = async (): Promise<CommodityDump> => ({
+      lastModified: new Date(T0),
+      auctions: [
+        { item: { id: ORE }, quantity: 20, unit_price: 100 },
+        { item: { id: ORE }, quantity: 100, unit_price: 200 },
+        { item: { id: GEM_A }, quantity: 99, unit_price: 1_500 },
+        { item: { id: GEM_B }, quantity: 50, unit_price: 10_000 },
+        { item: { id: 3010 }, quantity: 99, unit_price: 500 },
+        { item: { id: RAW }, quantity: 9_999, unit_price: 100 },
+        { item: { id: BASE }, quantity: 9_999, unit_price: 250 },
+        { item: { id: MID }, quantity: 9_999, unit_price: 500 },
+        { item: { id: TOP }, quantity: 9_999, unit_price: 600 },
+      ],
+    });
+    const html = craftingTabHtml(await buildCraftingModel({ db, fetchDump: dumpAll, executions: 10, now: new Date(T0) }));
+
+    // Top: crafting costs 800 each against 600 to buy -> NO. Mid would be worth crafting on its own (400 < 500) but only Make Top
+    // uses it, and Base (200 < 250) only feeds Make Mid: neither is asked about.
+    assert.match(html, /<h4>100 x Top<\/h4><p class="verdict"><strong>Worth crafting\? <span class="neg">NO<\/span>/);
+    assert.match(html, /so no point crafting Mid: only Make Top uses it among your operations/);
+    assert.match(html, /<h4>Mid<\/h4><p class="muted">Not asked: it is only needed to make Top, and you would buy that instead/);
+    assert.match(html, /<h4>Base<\/h4><p class="muted">Not asked: it is only needed to make Top, and you would buy that instead/);
+    assert.ok(!/<h4>100 x (Mid|Base)<\/h4>/.test(html), "the intermediates get no question of their own");
+    assert.ok(html.indexOf("100 x Top") < html.indexOf("<h4>Mid</h4>"), "the end product comes first");
   });
 
   it("has no sourcing section when every needed item is made by the shown operations", async () => {

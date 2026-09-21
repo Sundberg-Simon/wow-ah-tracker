@@ -85,9 +85,36 @@ export function minPrice(book: PriceBook | undefined): number | null {
   return book?.levels[0]?.price ?? null;
 }
 
-/** Total units listed at any price. */
+/**
+ * How far above the going price a listing can be and still count as part of the market. Commodity ladders often end
+ * in a handful of placeholder listings at 100x the real price (parked stacks nobody expects to sell); walking up
+ * into them to "buy that many" produces a cost that is real on paper and meaningless in practice.
+ */
+export const MAX_PRICE_MULTIPLE = 3;
+
+/**
+ * The most a listing may cost to count: MAX_PRICE_MULTIPLE times the going price, taken as the price at which the
+ * first few units are reached (not the single cheapest listing, so one low-ball outlier can't shrink the ceiling).
+ */
+export function priceCeiling(book: PriceBook | undefined): number | null {
+  if (!book || book.levels.length === 0) return null;
+  let cumulative = 0;
+  for (const l of book.levels) {
+    cumulative += l.quantity;
+    if (cumulative >= 5) return l.price * MAX_PRICE_MULTIPLE;
+  }
+  return book.levels[book.levels.length - 1].price * MAX_PRICE_MULTIPLE;
+}
+
+/** The listings that count: everything up to the price ceiling. */
+function saneLevels(book: PriceBook | undefined): PriceLevel[] {
+  const ceiling = priceCeiling(book);
+  return ceiling === null || !book ? [] : book.levels.filter((l) => l.price <= ceiling);
+}
+
+/** Units listed at a believable price (see MAX_PRICE_MULTIPLE). */
 export function listedQuantity(book: PriceBook | undefined): number {
-  return book ? book.levels.reduce((n, l) => n + l.quantity, 0) : 0;
+  return saneLevels(book).reduce((n, l) => n + l.quantity, 0);
 }
 
 export interface WalkResult {
@@ -99,12 +126,16 @@ export interface WalkResult {
   cost: number;
 }
 
-/** What it really costs to BUY `quantity` units: walk up the ask ladder from the cheapest price. */
+/**
+ * What it really costs to BUY `quantity` units: walk up the ask ladder from the cheapest price, over the listings
+ * that count (up to the price ceiling). Beyond that the market "can't supply" the rest - a shortfall - instead of
+ * quoting a price from a placeholder listing.
+ */
 export function walkBook(book: PriceBook | undefined, quantity: number): WalkResult {
   assertPositiveInt("quantity", quantity);
   let remaining = quantity;
   const parts: number[] = [];
-  for (const level of book?.levels ?? []) {
+  for (const level of saneLevels(book)) {
     if (remaining === 0) break;
     const take = Math.min(remaining, level.quantity);
     parts.push(take * level.price);
