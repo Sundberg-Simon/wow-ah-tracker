@@ -6,6 +6,7 @@ import { buildFlowGraph, layerNodes, type FlowGraph } from "./flow.js";
 import { craftingTabHtml } from "./flowHtml.js";
 import { fraction } from "./fraction.js";
 import { setItemName } from "./items.js";
+import { setPolicy, type Policy } from "./policy.js";
 import {
   buildBooks,
   fetchCommodityBooks,
@@ -76,7 +77,11 @@ describe("money", () => {
     assert.equal(formatGold(0), "0.00g");
     assert.equal(formatGold(29_500), "2.95g");
     assert.equal(formatGold(90_823_500), "9,082.35g");
-    assert.equal(formatGold(-15_750), "-1.57g");
+    assert.equal(formatGold(-15_750), "-1.58g", "1.575g rounds half away from zero");
+    assert.equal(formatGold(107_696), "10.77g", "rounded to the nearest silver, not cut off");
+    assert.equal(formatGold(99_950), "10.00g", "rounding carries into the gold");
+    assert.equal(formatGold(-40), "0.00g", "no sign on a value that rounds to nothing");
+    assert.equal(formatGold(50), "0.01g");
   });
 });
 
@@ -268,7 +273,7 @@ describe("flow graph", () => {
   });
 
   it("refuses to layer a graph with a cycle", () => {
-    const item = (id: string) => ({ id, kind: "item" as const, itemId: 1, label: id, unitPrice: null, listedQuantity: 0, flags: [] });
+    const item = (id: string) => ({ id, kind: "item" as const, itemId: 1, label: id, unitPrice: null, listedQuantity: 0, policy: null, flags: [] });
     const cyclic: FlowGraph = {
       nodes: [item("a"), item("b")],
       edges: [{ from: "a", to: "b", quantity: fraction(1, 1), value: null }, { from: "b", to: "a", quantity: fraction(1, 1), value: null }],
@@ -331,13 +336,15 @@ describe("buildCraftingModel", () => {
 });
 
 describe("craftingTabHtml", () => {
-  const model = async (fetchDump: Parameters<typeof buildCraftingModel>[0]["fetchDump"], names = true) => {
+  const model = async (
+    fetchDump: Parameters<typeof buildCraftingModel>[0]["fetchDump"],
+    policies: [number, Policy][] = [],
+  ) => {
     const { db } = prospectFixture();
-    if (names) {
-      setItemName(db, ORE, "Test Ore");
-      setItemName(db, GEM_A, "Gem <b>A</b>");
-      setItemName(db, GEM_B, "Gem B");
-    }
+    setItemName(db, ORE, "Test Ore");
+    setItemName(db, GEM_A, "Gem <b>A</b>");
+    setItemName(db, GEM_B, "Gem B");
+    for (const [id, policy] of policies) setPolicy(db, id, policy);
     return buildCraftingModel({ db, fetchDump, executions: 10, now: new Date(T0) });
   };
   const dump = async (): Promise<CommodityDump> => ({
@@ -350,16 +357,61 @@ describe("craftingTabHtml", () => {
     ],
   });
 
-  it("shows the profit, break-even, item names and the thin-market flag", async () => {
-    const html = craftingTabHtml(await model(dump));
+  it("shows the saving, policies, break-even, names and shares of the market", async () => {
+    // A needed: 5 units wanted, only 4 listed @3 000 -> 12 000 (lower bound). B sold: 1 x 10 000 - 5% = 9 500.
+    // Credit 21 500, ore 8 000 -> saving 13 500 = 1.35g; break-even 21 500 / 50 ore = 430 copper = 0.04g.
+    const html = craftingTabHtml(await model(dump, [[GEM_A, "need"], [GEM_B, "sell"]]));
     assert.match(html, /Prospect Test Ore/);
-    assert.match(html, /Test Ore/);
-    assert.match(html, /\+1\.57g/); // 15 750 copper
-    assert.match(html, /thin market/);
+    assert.match(html, /\+1\.35g/);
+    assert.match(html, /cheaper to run/);
+    assert.match(html, /0\.04g/);
+    assert.match(html, /badge need/);
+    assert.match(html, /badge sell/);
+    assert.match(html, /not enough listed/, "the needed gem can't be fully bought");
+    assert.match(html, /lower bound/);
     assert.match(html, /5 = 125% of the 4 listed/, "your units as a share of the whole market");
     assert.match(html, /50 = 42% of the 120 listed/, "input side too: 50 ore of 120 listed");
     assert.match(html, /5(\.\d+)?% AH cut/);
     assert.match(html, /yields from 1,000 ore in 1 batch/);
+  });
+
+  it("flags a thin market only for a gem you SELL", async () => {
+    const sold = craftingTabHtml(await model(dump, [[GEM_A, "sell"], [GEM_B, "ignore"]])); // 5 to sell, 4 listed
+    assert.match(sold, /thin market/);
+    const needed = craftingTabHtml(await model(dump, [[GEM_A, "need"], [GEM_B, "ignore"]]));
+    assert.ok(!/thin market/.test(needed));
+  });
+
+  it("says 'cheaper to buy' when the gems you need don't cover the ore", async () => {
+    const html = craftingTabHtml(await model(dump, [[GEM_A, "ignore"], [GEM_B, "ignore"]]));
+    assert.match(html, /cheaper to buy/);
+    assert.match(html, /-8\.00g|-0\.80g/, "saving is negative: ore 8 000 copper, nothing worth anything");
+  });
+
+  it("shows each gem's share of the value and of the saving, and the rows add up", async () => {
+    // A needed 12 000 (lower bound, only 4 of 5 listed), B needed 10 000 -> total 22 000 = 55% / 45%.
+    // Ore 8 000 shared by value: A 4 364, B 3 636 -> savings 7 636 (0.76g) and 6 364 (0.64g); total 14 000 (1.40g).
+    const html = craftingTabHtml(await model(dump, [[GEM_A, "need"], [GEM_B, "need"]]));
+    assert.match(html, /Share of value/);
+    assert.match(html, />55%</);
+    assert.match(html, />45%</);
+    assert.match(html, /\+0\.76g/);
+    assert.match(html, /\+0\.64g/);
+    assert.match(html, /\+1\.40g/, "the saving in the summary");
+    assert.ok(!/free/.test(html), "no misleading 'free' per gem");
+  });
+
+  it("shows dashes for an ignored gem's buy and saving columns", async () => {
+    const html = craftingTabHtml(await model(dump, [[GEM_A, "need"], [GEM_B, "ignore"]]));
+    assert.match(html, /badge ignore/);
+    assert.match(html, /flow-node ignored/);
+  });
+
+  it("shows 'no policy' and an unknown saving, not a number, when a gem has no policy", async () => {
+    const html = craftingTabHtml(await model(dump, [[GEM_A, "need"]])); // B unset
+    assert.match(html, /no policy/);
+    assert.match(html, /unknown/);
+    assert.ok(!/\+\d[\d,]*\.\d\dg/.test(html), "no fabricated saving");
   });
 
   it("escapes item names", async () => {

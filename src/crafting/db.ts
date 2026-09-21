@@ -104,6 +104,14 @@ const MIGRATIONS: string[] = [
     UNIQUE (item_id, observed_at)
   );
   `,
+  // v4: what each item is to the player, for the buy-vs-prospect analysis (see policy.ts)
+  `
+  CREATE TABLE item_policy (
+    item_id    INTEGER PRIMARY KEY CHECK (item_id > 0),
+    policy     TEXT NOT NULL,   -- validated in code: need | sell | ignore
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+  );
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

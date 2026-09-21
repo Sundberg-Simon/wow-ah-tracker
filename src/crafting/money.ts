@@ -28,11 +28,15 @@ export function sumCopper(amounts: readonly number[]): number {
   return total;
 }
 
-/** Whole copper -> "12.34g" (display only; the value itself stays an integer). */
+/**
+ * Whole copper -> "12.34g", rounded to the nearest silver (display only; the
+ * value itself stays an integer). Rounded rather than cut off, so 10.7696g
+ * reads 10.77g; a value that rounds to nothing has no sign ("0.00g", not "-0.00g").
+ */
 export function formatGold(copper: number): string {
-  const sign = copper < 0 ? "-" : "";
-  const abs = Math.abs(copper);
-  const gold = Math.floor(abs / 10_000);
-  const hundredths = Math.floor((abs % 10_000) / 100);
-  return `${sign}${gold.toLocaleString("en-US")}.${String(hundredths).padStart(2, "0")}g`;
+  const totalSilver = Math.round(Math.abs(copper) / 100);
+  const gold = Math.floor(totalSilver / 100);
+  const silver = totalSilver % 100;
+  const sign = copper < 0 && totalSilver > 0 ? "-" : "";
+  return `${sign}${gold.toLocaleString("en-US")}.${String(silver).padStart(2, "0")}g`;
 }

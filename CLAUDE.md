@@ -667,6 +667,43 @@ eftersom.]
       * Passar redan i strukturen: `get_cheapest_cost(item)` = min(BUY,
         PROSPECT-via-Kyparite, ...) med förklarande träd; en operation med
         flera outputs behöver en explicit allokeringsregel (ovan).
+    - **Buy vs prospect / biprodukt-policy (2026-09-21, byggt)**: per item en
+      policy i den LOKALA crafting-DB:n (`item_policy`, schema v4, `policy.ts`;
+      CLI `policy set|list|clear`): **need** = används i egna crafts, värd =
+      vad det skulle kosta att köpa så många (går uppför säljlistan; AH-avgift
+      irrelevant); **sell** = lägsta pris minus AH-avgift; **ignore** = 0.
+      Ingen policy = OKÄNT (aldrig gissat, samma princip som "unknown, not
+      zero"). Simons val 2026-09-21: 9 gems `need` (Sparkling Shard, Primordial
+      Ruby, Lapis Lazuli, Sunstone, Pandarian Garnet, Alexandrite, River's
+      Heart, Wild Jade, Sun's Radiance), 4 `ignore` (Tiger Opal, Roguestone,
+      Vermilion Onyx, Imperial Amethyst), inga `sell`.
+      * **`sourcing.ts`**: `saving = värdet av allt operationen ger (efter
+        policy) − kostnaden för inputs`; >0 = "cheaper to run", ≤0 = "cheaper
+        to buy" (lika = köp, ingen vinning), null = okänt. Break-even-pris för
+        input = totalvärde / inputmängd. Bråkdelar av enheter (förväntade
+        yields är sällan heltal) köps exakt: hela enheterna uppför listan +
+        resten till nästa enhets pris (`walkBookFractional`); kan marknaden
+        inte leverera allt blir värdet en NEDRE GRÄNS och flaggas.
+      * **`cheapest.ts` = `get_cheapest_cost(item)`**: BUY mot PROSPECT (en
+        option per operation som ger itemet), jämfört i batchskala, med ett
+        förklarande träd (köp inputs, kredit per biprodukt efter policy,
+        nettokostnad). CLI: `npm run crafting -- cheapest <item>`.
+      * **Designfälla som hittades vid visuell kontroll**: kostnaden per gem
+        "om övriga krediteras" (`effectiveUnitCost`) blir `free` för nästan alla
+        gems, eftersom EN dyr gem (Sunstone) ensam kan täcka ore-kostnaden — och
+        varje rad använder hela besparingen (dubbelräkning). Flik-tabellen
+        visar därför istället **ore-kostnaden delad efter värde**
+        (`allocatedCost`): raderna summerar till totalen och `Share of value`
+        visar hur mycket resultatet vilar på en enda gem. `effectiveUnitCost`
+        finns kvar för `cheapest` (frågan "hur billigt får jag just den här"),
+        med en varningsrad om att biprodukterna måste användas/säljas på riktigt.
+      * **Kända begränsningar (ÖPPET)**: `need` värderas som obegränsad
+        användning — en batch ger gems i fasta proportioner, och enheter utöver
+        vad Simon faktiskt använder är bara värda försäljningspris. Mängd per
+        gem ("behöver ~20 per craft") vore nästa förfining. Resultatet är också
+        priskänsligt: i första körningen stod Sunstone för ~46 % av värdet.
+      * `formatGold` avrundar nu till närmaste silver (tidigare kapades det:
+        10,7696 g visades 10,76).
     - **Backup av crafting-DB:n (2026-09-21)**: Simons prospecting-batcher är
       oersättliga observationer och ligger i EN gitignorerad fil, så de
       backas upp (`src/crafting/backup.ts`, `npm run crafting -- backup
