@@ -25,6 +25,9 @@ export interface CraftingTabModel {
   /** Buy-vs-run analysis per operation, same order as `economics`. */
   sourcing: SourcingAnalysis[];
   policies: Map<number, Policy>;
+  /** Names of every item involved, for text outside the flow graph. */
+  itemNames: Map<number, string>;
+  /** Only the operations that know what they yield; the others are "waiting for data". */
   graph: FlowGraph;
 }
 
@@ -55,6 +58,12 @@ export async function buildCraftingModel(args: {
   const policies = getPolicies(db, itemIds);
   const economics = operations.map((op) => computeEconomics(op, prices.books, { executions }));
   const sourcing = economics.map((e) => analyzeSourcing(e, prices.books, policies));
+  // Operations that don't know what they yield yet (no logged runs / batches) stay out of the flow: their
+  // "what if I ran it 600 times" figures would only be noise. They are listed separately as waiting for data.
+  const ready = economics.map((_, i) => i).filter((i) => economics[i].operation.outputs.length > 0);
+  const nameOf = (id: number) => getItemName(db, id) ?? String(id);
+  const itemNames = new Map<number, string>();
+  for (const id of itemIds) itemNames.set(id, nameOf(id));
   return {
     generatedAt: now,
     executions,
@@ -65,6 +74,7 @@ export async function buildCraftingModel(args: {
     economics,
     sourcing,
     policies,
-    graph: buildFlowGraph(economics, (id) => getItemName(db, id) ?? String(id), sourcing),
+    itemNames,
+    graph: buildFlowGraph(ready.map((i) => economics[i]), nameOf, ready.map((i) => sourcing[i])),
   };
 }

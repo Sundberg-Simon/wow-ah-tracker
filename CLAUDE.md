@@ -541,8 +541,9 @@ eftersom.]
       1 prospecting (KLART: batches → poolad observerad yield + expected
       output), 2 transmutes/processing-operationer (generell
       INPUT→OUTPUT-modell — BYGGD 2026-09-20 med "Prospect Kyparite" som
-      första instans, se "Lager 2-modellen" nedan; transmutes själva är
-      ännu inte inmatade), 3 intermediates (BUY vs CRAFT rekursivt), 4
+      första instans, se "Lager 2-modellen" nedan; fyra Alchemy-transmutes
+      uppsatta 2026-09-21, se "Loggade transmutes" — väntar på Simons första
+      loggade körningar), 3 intermediates (BUY vs CRAFT rekursivt), 4
       slutprodukter (enkel end-to-end-produkt → Panther mounts → Engineering
       mounts → Vial of the Sands → övrigt). Marknadsdata
       (`get_ah_price(item, realm)`) är fristående från trackedItems/synk/
@@ -667,6 +668,57 @@ eftersom.]
       * Passar redan i strukturen: `get_cheapest_cost(item)` = min(BUY,
         PROSPECT-via-Kyparite, ...) med förklarande träd; en operation med
         flera outputs behöver en explicit allokeringsregel (ovan).
+    - **Loggade transmutes (2026-09-21)**: fyra operationer uppsatta, vars
+      utfall Simon loggar empiriskt istället för att anta en fast kvot.
+      * **Verifierat mot Blizzards API 2026-09-21** (Pandaria Alchemy, skill-
+        tier 2481, kategori Transmutation; strukturerade reagens, hela tieren
+        skannad): `Transmute: Sun's Radiance` (recept 26015) = 1 Sunstone
+        (76134) + 1 Golden Lotus (72238) → Sun's Radiance (76142);
+        `Transmute: River's Heart` (26008) = 1 Lapis Lazuli (76133) + 1 Golden
+        Lotus → River's Heart (76138); `Transmute: Primordial Ruby` (26021) =
+        1 Pandarian Garnet (76136) + 1 Golden Lotus → Primordial Ruby (76131);
+        `Transmute: Wild Jade` (26009) = 1 Alexandrite (76137) + 1 Golden Lotus
+        → Wild Jade (76139). API:t anger nominell producerad kvantitet 1 för
+        alla; det är referens, INTE inlagt som fakta — utfallet är okänt tills
+        Simon loggat körningar. Golden Lotus = item 72238 (Herb).
+        Operationerna ligger i Simons lokala DB (#2–#5), inte i repot.
+        Blizzard listar två transmutes till (Roguestone → Imperial Amethyst,
+        Tiger Opal → Vermilion Onyx); inte uppsatta, alla fyra gems där är
+        sådana Simon ignorerar.
+      * **Varför körningar per OPERATION, inte prospecting-batcher**: batcherna
+        är nycklade på ETT ore-item; en transmute har två inputs, och samma
+        item (Sunstone) är både prospecting-output och transmute-input, så en
+        ore-nyckel hade blandat ihop olika saker. Nytt (schema v5):
+        `operation_runs` + `operation_run_outputs` (`runs.ts`), och
+        `operation_run_source` markerar att en operation tar sina outputs från
+        egna körningar (`op add --from-runs`, `OperationInput.fromRuns`,
+        `basis.type = "empirical-runs"`). Yield = poolad (total output / total
+        executions), aldrig snitt av rates; en körning är en KOMPLETT post
+        (ej angivet item = 0). CLI: `run add --op <id|namn> --count <antal
+        gånger> --got <item>:<antal> ...`, `run list`, `run remove`.
+      * **Körningar raderas aldrig av misstag**: ingen kaskad från operations,
+        så `op remove` vägras så länge operationen har loggade körningar (de
+        är oersättliga observationer, samma princip som batcherna). En körning
+        kan bara loggas mot en operation som har `--from-runs` (annars vore det
+        en tyst no-op).
+      * **Okänt tills data finns**: en operation utan körningar ger inga
+        outputs och en varning ("UNKNOWN, not zero"); ingen 1:1 antas.
+        Crafting-fliken lägger sådana operationer i en egen lista "Waiting for
+        data" istället för i sammanfattning/flöde (annars fylls den med
+        "vad om jag körde 600 gånger"-brus och `unknown`-rader), och
+        `cheapest` säger vilka operationer som inte kunde jämföras.
+      * `cheapest` döper alternativet efter operationens slag (PROSPECT /
+        TRANSMUTE / CRAFT), och skriver en kostnad ≤ 0 som "free (de andra
+        outputs täcker inputs med X per enhet)" istället för ett negativt pris.
+      * **Flödesfixar**: in- och utflöde för ett item som en operation gör och
+        en annan förbrukar redovisas separat ("made: … / used: …") — de får
+        inte adderas mot marknadens utbud.
+      * **Känd begränsning (ÖPPET, nästa steg)**: varje operation storleksätts
+        fristående (600 körningar). I en verklig kedja (Kyparite → Sunstone →
+        Sun's Radiance) borde transmutens mängd styras av vad prospectingen
+        faktiskt ger, och en transmutes input-kostnad för Sunstone borde vara
+        min(köp, prospect) — det är lager 3 (rekursivt BUY vs CRAFT vs
+        PROSPECT), inte byggt än.
     - **Buy vs prospect / biprodukt-policy (2026-09-21, byggt)**: per item en
       policy i den LOKALA crafting-DB:n (`item_policy`, schema v4, `policy.ts`;
       CLI `policy set|list|clear`): **need** = används i egna crafts, värd =

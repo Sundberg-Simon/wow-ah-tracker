@@ -266,6 +266,10 @@ describe("getCheapestCost", () => {
     assert.match(text, /PROSPECT \(Prospect Ore\): 0\.16g per unit, 0\.16g cheaper/);
     assert.match(text, /-> PROSPECT via Prospect Ore/);
     assert.match(text, /worth nothing to you/);
+    // Gem B via the operation: ore 8 000 - Gem A's 16 000 credit = -8 000, printed as what it means, not as a negative price
+    const free = formatCheapestCost(getCheapestCost({ itemId: B, analyses, books: market, nameOf }));
+    assert.match(free, /PROSPECT \(Prospect Ore\): free \(the other outputs more than cover the inputs, by 0\.80g per unit\)/);
+    assert.ok(!/-0\.80g per unit/.test(free));
     const unknown = formatCheapestCost(getCheapestCost({ itemId: 9999, analyses, books: market, nameOf }));
     assert.match(unknown, /UNKNOWN/);
     assert.match(unknown, /WARNING/);

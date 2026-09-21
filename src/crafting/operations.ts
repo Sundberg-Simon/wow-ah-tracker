@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { inTransaction } from "./db.js";
 import { fraction, scaleFraction, type Fraction } from "./fraction.js";
 import { getObservedYields, type ObservedYields } from "./prospecting.js";
+import { countOperationRuns, getObservedRunYields, type ObservedRunYields } from "./runs.js";
 import {
   assertPositiveInt,
   normalizeOptionalText,
@@ -13,10 +14,14 @@ import {
  *
  * One model covers prospecting, transmutes and (later) crafts and
  * mass-processing. An operation's outputs are EXPECTED units per single
- * execution, as exact fractions, from one of two bases:
- *   - fixed:     written down by hand (a guaranteed 3 = 3/1, a 1-in-5 proc = 1/5)
- *   - empirical: derived on demand from the recorded prospecting batches, so it
- *                can never drift from the raw data (nothing is cached).
+ * execution, as exact fractions, from one of three bases:
+ *   - fixed:       written down by hand (a guaranteed 3 = 3/1, a 1-in-5 proc = 1/5)
+ *   - prospecting: derived on demand from the recorded prospecting batches of
+ *                  one ore, so it can never drift from the raw data
+ *   - runs:        derived on demand from the operation's OWN logged runs (see
+ *                  runs.ts) - for transmutes and other multi-input operations
+ *                  whose yield the player wants to measure, not assume.
+ * Nothing empirical is cached.
  */
 
 export const OPERATION_KINDS = ["prospect", "transmute", "craft"] as const;
@@ -43,6 +48,8 @@ export interface OperationInput {
   outputs?: FixedOutput[];
   /** Derive outputs from observed prospecting yields of this ore, which must be one of the inputs. */
   fromProspecting?: { oreItemId: number; patch?: string | null };
+  /** Derive outputs from this operation's own logged runs (`run add`); unknown until some are logged. */
+  fromRuns?: { patch?: string | null };
 }
 
 export interface ResolvedOperation {
@@ -56,7 +63,8 @@ export interface ResolvedOperation {
   /** Why the outputs are what they are - the explainability hook. */
   basis:
     | { type: "fixed" }
-    | { type: "empirical"; oreItemId: number; patch: string | null; observed: ObservedYields };
+    | { type: "empirical"; oreItemId: number; patch: string | null; observed: ObservedYields }
+    | { type: "empirical-runs"; patch: string | null; observed: ObservedRunYields };
   /** Things a consumer must not ignore, e.g. an empirical operation with no data. */
   warnings: string[];
 }
@@ -77,9 +85,10 @@ function validateInput(input: OperationInput): void {
   }
 
   const hasFixed = (input.outputs?.length ?? 0) > 0;
-  const hasEmpirical = input.fromProspecting !== undefined;
-  if (hasFixed === hasEmpirical) {
-    throw new ValidationError("give either fixed outputs or fromProspecting, not both and not neither");
+  const hasProspecting = input.fromProspecting !== undefined;
+  const hasRuns = input.fromRuns !== undefined;
+  if (Number(hasFixed) + Number(hasProspecting) + Number(hasRuns) !== 1) {
+    throw new ValidationError("give exactly one output basis: fixed outputs, fromProspecting or fromRuns");
   }
 
   if (hasFixed) {
@@ -92,7 +101,7 @@ function validateInput(input: OperationInput): void {
       if (outIds.has(o.itemId)) throw new ValidationError(`output item ${o.itemId} is listed twice`);
       outIds.add(o.itemId);
     }
-  } else {
+  } else if (hasProspecting) {
     const ore = input.fromProspecting!.oreItemId;
     assertPositiveInt("prospecting ore item id", ore);
     if (!inputIds.has(ore)) {
@@ -130,16 +139,29 @@ export function addOperation(db: DatabaseSync, input: OperationInput): number {
         const f = fraction(o.expected.num, o.expected.den); // store reduced
         insertOutput.run(id, o.itemId, f.num, f.den);
       }
-    } else {
+    } else if (input.fromProspecting) {
       db.prepare(
         "INSERT INTO operation_empirical_source (operation_id, ore_item_id, patch) VALUES (?, ?, ?)",
-      ).run(id, input.fromProspecting!.oreItemId, normalizeOptionalText(input.fromProspecting!.patch));
+      ).run(id, input.fromProspecting.oreItemId, normalizeOptionalText(input.fromProspecting.patch));
+    } else {
+      db.prepare("INSERT INTO operation_run_source (operation_id, patch) VALUES (?, ?)").run(
+        id,
+        normalizeOptionalText(input.fromRuns?.patch),
+      );
     }
     return id;
   });
 }
 
+/**
+ * Delete an operation. Refused while it has logged runs: those are your own
+ * irreplaceable observations, so remove them (`run remove`) on purpose first.
+ */
 export function removeOperation(db: DatabaseSync, operationId: number): boolean {
+  const runs = countOperationRuns(db, operationId);
+  if (runs > 0) {
+    throw new ValidationError(`operation ${operationId} has ${runs} logged run(s); remove them first (run remove <id>) if you really want to delete it`);
+  }
   return db.prepare("DELETE FROM operations WHERE operation_id = ?").run(operationId).changes > 0;
 }
 
@@ -180,6 +202,29 @@ export function resolveOperation(db: DatabaseSync, operationId: number): Resolve
   const empirical = db
     .prepare("SELECT ore_item_id, patch FROM operation_empirical_source WHERE operation_id = ?")
     .get(operationId) as { ore_item_id: number; patch: string | null } | undefined;
+
+  const runSource = empirical
+    ? undefined
+    : (db.prepare("SELECT patch FROM operation_run_source WHERE operation_id = ?").get(operationId) as { patch: string | null } | undefined);
+  if (runSource) {
+    const observed = getObservedRunYields(db, operationId, runSource.patch ? { patch: runSource.patch } : {});
+    const warnings: string[] = [];
+    if (observed.sample.runCount === 0) {
+      warnings.push(
+        `no runs logged for ${op.name}` + (runSource.patch ? ` on patch ${runSource.patch}` : "") + " - outputs are UNKNOWN, not zero (log some with: run add)",
+      );
+    }
+    return {
+      operationId,
+      kind: op.kind,
+      name: op.name,
+      source: op.source,
+      inputs,
+      outputs: observed.yields.map((y) => ({ itemId: y.itemId, expected: y.perExecution })),
+      basis: { type: "empirical-runs", patch: runSource.patch, observed },
+      warnings,
+    };
+  }
 
   if (!empirical) {
     const outputs = (

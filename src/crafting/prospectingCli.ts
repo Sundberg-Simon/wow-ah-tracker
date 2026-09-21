@@ -12,12 +12,12 @@ export function parseCount(label: string, raw: string): number {
 }
 
 /** "<item id or name>:<quantity>", split on the LAST colon so names may contain one. */
-export function parseOutputSpec(db: DatabaseSync, spec: string): BatchOutput {
+export function parseOutputSpec(db: DatabaseSync, spec: string, flag = "--gem"): BatchOutput {
   const cut = spec.lastIndexOf(":");
-  if (cut <= 0) throw new ValidationError(`--gem "${spec}" must look like <item id or name>:<quantity>`);
+  if (cut <= 0) throw new ValidationError(`${flag} "${spec}" must look like <item id or name>:<quantity>`);
   return {
     itemId: resolveItem(db, spec.slice(0, cut)),
-    quantity: parseCount(`quantity in --gem "${spec}"`, spec.slice(cut + 1)),
+    quantity: parseCount(`quantity in ${flag} "${spec}"`, spec.slice(cut + 1)),
   };
 }
 
