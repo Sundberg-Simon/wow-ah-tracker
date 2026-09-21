@@ -1,4 +1,5 @@
-import { walkBook, type PriceBook } from "./market.js";
+import { fractionToNumber, type Fraction } from "./fraction.js";
+import { minPrice, type PriceBook } from "./market.js";
 import { formatGold } from "./money.js";
 import type { OperationKind } from "./operations.js";
 import type { GemSourcing, SourcingAnalysis } from "./sourcing.js";
@@ -7,13 +8,22 @@ import type { GemSourcing, SourcingAnalysis } from "./sourcing.js";
  * get_cheapest_cost(item): what is the cheapest way to obtain one unit of an
  * item - buy it, or run an operation that yields it - and WHY, as a tree.
  *
- * Both options are priced at the scale of one batch of the operation, because
- * that is how prospecting works: you don't get one Sunstone, you get a batch of
- * mixed gems, and the price of the ore is shared with everything else in it.
- * The other outputs are credited under the player's policy (see policy.ts).
+ * Every route is compared head to head with buying THE SAME NUMBER of units, so
+ * the two sides are always the same size (an earlier version priced the buy
+ * side at one size and the operation at another and produced nonsense).
+ *
+ * Two kinds of route:
+ *   - a single-output operation (a transmute, a craft): its cost per unit is
+ *     just its inputs divided by what it yields. Comparable with buying, and
+ *     the only kind that is ever recommended.
+ *   - a joint-product operation (prospecting gives many different items at
+ *     once): the price of the inputs is shared with everything else it yields,
+ *     so the cost of ONE item depends on what the by-products are worth to you.
+ *     Shown for information; the honest answer for those is the whole-chain
+ *     comparison (chain.ts), not a per-item price.
  */
 
-export type Strategy = "BUY" | "PROSPECT" | "TRANSMUTE" | "CRAFT";
+export type Strategy = "PROSPECT" | "TRANSMUTE" | "CRAFT";
 
 /** The way of getting an item through an operation is named after what kind of operation it is. */
 const strategyFor = (kind: OperationKind): Strategy => (kind === "prospect" ? "PROSPECT" : kind === "transmute" ? "TRANSMUTE" : "CRAFT");
@@ -25,35 +35,46 @@ export interface CostNode {
   children: CostNode[];
 }
 
-export interface CostOption {
+export interface Route {
   strategy: Strategy;
-  /** What the option is, e.g. "buy on the auction house" or the operation name. */
+  /** The operation's name. */
   via: string;
-  /** Cost of ONE unit of the item this way; null = unknown; <= 0 means the by-products pay for it. */
+  /** More than one output: the cost per unit depends on crediting the by-products, so it is never recommended on that basis. */
+  joint: boolean;
+  /** How many units of the item this route yields at the size it was priced at (the same number is used for the buy side). */
+  units: Fraction;
+  /** Cost of ONE unit via the route (inputs bought on the auction house; by-products credited under your policy for joint routes). Null = unknown. */
   unitCost: number | null;
+  /** Cost of one unit if you bought the same number of units instead, walking the listings. Null = unknown. */
+  buyUnitCost: number | null;
+  /** buyUnitCost - unitCost; > 0 means the route is cheaper than buying. Null when either is unknown. */
+  savingPerUnit: number | null;
   tree: CostNode;
 }
 
 export interface CheapestCost {
   itemId: number;
   itemLabel: string;
-  options: CostOption[];
-  /** The cheapest option with a known cost, or null when none is known. */
-  chosen: CostOption | null;
-  /** How much cheaper the chosen option is than the next known one per unit; null with fewer than two known. */
-  savingPerUnit: number | null;
+  /** The cheapest single listing right now, for reference. */
+  buyNowUnitCost: number | null;
+  routes: Route[];
+  /** The single-output route that beats buying by the most, or null. */
+  best: Route | null;
+  /**
+   * "route": a single-output route beats buying. "buy": buying is cheaper than (or the only alternative to) every
+   * single-output route. "unknown": a price is missing.
+   */
+  verdict: "route" | "buy" | "unknown";
   warnings: string[];
 }
 
-const units = (g: GemSourcing) => g.expectedUnits.num / g.expectedUnits.den;
+const units = (g: GemSourcing) => fractionToNumber(g.expectedUnits);
 const fmtUnits = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 1 });
 
-function policyWord(g: GemSourcing): string {
-  return g.policy === null ? "no policy" : g.policy;
-}
-
-function prospectOption(target: GemSourcing, a: SourcingAnalysis, nameOf: (id: number) => string): CostOption {
+function routeFor(target: GemSourcing, a: SourcingAnalysis, nameOf: (id: number) => string): Route {
   const op = a.economics.operation;
+  const strategy = strategyFor(op.kind);
+  const others = a.gems.filter((x) => x !== target);
   const children: CostNode[] = [
     {
       label: `buy the inputs: ${a.economics.inputs.map((i) => `${i.quantity.toLocaleString("en-US")} x ${nameOf(i.itemId)}`).join(", ")}`,
@@ -61,8 +82,8 @@ function prospectOption(target: GemSourcing, a: SourcingAnalysis, nameOf: (id: n
       children: [],
     },
   ];
-  for (const g of a.gems.filter((x) => x !== target)) {
-    const what = `${fmtUnits(units(g))} x ${nameOf(g.itemId)} (${policyWord(g)})`;
+  for (const g of others) {
+    const what = `${fmtUnits(units(g))} x ${nameOf(g.itemId)} (${g.policy ?? "no policy"})`;
     children.push({
       label:
         g.creditKind === "avoided-purchase"
@@ -76,23 +97,27 @@ function prospectOption(target: GemSourcing, a: SourcingAnalysis, nameOf: (id: n
       children: [],
     });
   }
-  const unitCost = target.effectiveUnitCost;
-  const others = a.gems.filter((x) => x !== target);
   const net =
     a.inputCost !== null && others.every((g) => g.credit !== null) ? a.inputCost - others.reduce((s, g) => s + (g.credit as number), 0) : null;
   children.push({ label: `= net cost of ${fmtUnits(units(target))} x ${nameOf(target.itemId)}`, copper: net, children: [] });
-  const strategy = strategyFor(op.kind);
+
+  const unitCost = target.effectiveUnitCost;
+  const buyUnitCost = target.buyLowerBound ? null : target.buyUnitCost;
   return {
     strategy,
     via: op.name,
+    joint: others.length > 0,
+    units: target.expectedUnits,
     unitCost,
+    buyUnitCost,
+    savingPerUnit: unitCost !== null && buyUnitCost !== null ? buyUnitCost - unitCost : null,
     tree: { label: `${strategy} via ${op.name}: per ${nameOf(target.itemId)}`, copper: unitCost, children },
   };
 }
 
 /**
- * The cheapest way to get one unit of `itemId`, from the given analyses (one
- * per operation, all sized for the same batch) and current prices.
+ * The cheapest way to get one unit of `itemId`, from the given analyses (one per operation, sized for one
+ * batch each) and current prices.
  */
 export function getCheapestCost(args: {
   itemId: number;
@@ -102,42 +127,17 @@ export function getCheapestCost(args: {
 }): CheapestCost {
   const { itemId, analyses, books, nameOf } = args;
   const warnings: string[] = [];
-  const options: CostOption[] = [];
 
-  // BUY. Priced at the scale of the first operation that yields the item (same quantity the
-  // PROSPECT option produces, so the two are comparable); at one unit if no operation yields it.
-  const producing = analyses.filter((a) => a.gems.some((g) => g.itemId === itemId));
-  const scale = producing[0]?.gems.find((g) => g.itemId === itemId);
-  if (scale) {
-    const buyNode: CostNode = {
-      label: `buy ${fmtUnits(units(scale))} x ${nameOf(itemId)} on the auction house (walking the listings from the cheapest)`,
-      copper: scale.buyCost,
-      children: [],
-    };
-    if (scale.buyLowerBound) warnings.push(`the market cannot supply ${fmtUnits(units(scale))} x ${nameOf(itemId)}; the buy price is a lower bound`);
-    options.push({
-      strategy: "BUY",
-      via: "auction house",
-      unitCost: scale.buyLowerBound ? null : scale.buyUnitCost,
-      tree: { label: `BUY ${nameOf(itemId)}: per unit`, copper: scale.buyLowerBound ? null : scale.buyUnitCost, children: [buyNode] },
-    });
-  } else {
-    const walk = walkBook(books.get(itemId), 1);
-    const price = walk.shortfall === 0 ? walk.cost : null;
-    if (price === null) warnings.push(`nothing is listed for ${nameOf(itemId)}, so its buy price is unknown`);
-    options.push({
-      strategy: "BUY",
-      via: "auction house",
-      unitCost: price,
-      tree: { label: `BUY ${nameOf(itemId)}: per unit`, copper: price, children: [{ label: "cheapest single listing", copper: price, children: [] }] },
-    });
-  }
+  const buyNow = minPrice(books.get(itemId));
+  if (buyNow === null) warnings.push(`nothing is listed for ${nameOf(itemId)} right now, so its buy price is unknown`);
 
-  for (const a of producing) {
-    const target = a.gems.find((g) => g.itemId === itemId) as GemSourcing;
-    const option = prospectOption(target, a, nameOf);
-    options.push(option);
-    for (const w of a.warnings) if (!warnings.includes(w)) warnings.push(w);
+  const routes: Route[] = [];
+  for (const a of analyses) {
+    const target = a.gems.find((g) => g.itemId === itemId);
+    if (!target) continue;
+    routes.push(routeFor(target, a, nameOf));
+    if (target.buyLowerBound) warnings.push(`the market cannot supply ${fmtUnits(units(target))} x ${nameOf(itemId)}, so the buy price at that size is unknown`);
+    for (const w of a.warnings) if (!warnings.includes(w) && !/no runs logged|no prospecting batches/.test(w)) warnings.push(w);
   }
 
   // An operation with no logged data yet doesn't know what it yields, so it can't be compared - say so
@@ -147,47 +147,46 @@ export function getCheapestCost(args: {
     warnings.push(`${uncompared.length} operation(s) have no logged data yet, so what they yield is unknown and they were not compared: ${uncompared.join(", ")}`);
   }
 
-  const known = options.filter((o) => o.unitCost !== null).sort((x, y) => (x.unitCost as number) - (y.unitCost as number));
-  return {
-    itemId,
-    itemLabel: nameOf(itemId),
-    options,
-    chosen: known[0] ?? null,
-    savingPerUnit: known.length >= 2 ? (known[1].unitCost as number) - (known[0].unitCost as number) : null,
-    warnings,
-  };
+  const single = routes.filter((r) => !r.joint);
+  const winners = single.filter((r) => r.savingPerUnit !== null && r.savingPerUnit > 0).sort((x, y) => (y.savingPerUnit as number) - (x.savingPerUnit as number));
+  const best = winners[0] ?? null;
+  const allKnown = single.every((r) => r.savingPerUnit !== null);
+  const verdict: CheapestCost["verdict"] = best ? "route" : allKnown && buyNow !== null ? "buy" : "unknown";
+
+  return { itemId, itemLabel: nameOf(itemId), buyNowUnitCost: buyNow, routes, best, verdict, warnings };
 }
 
-/** Plain-text rendering of the decision and its tree (used by the CLI). */
-export function formatCheapestCost(result: CheapestCost): string {
+/** Plain-text rendering of the decision and its trees (used by the CLI). */
+export function formatCheapestCost(r: CheapestCost): string {
   const money = (c: number | null) => (c === null ? "unknown" : formatGold(c));
   // A cost of zero or less means the other outputs more than pay for the inputs; say that instead of printing a negative price.
-  const unitMoney = (c: number | null) =>
-    c === null ? "unknown per unit" : c <= 0 ? `free (the other outputs more than cover the inputs, by ${formatGold(0 - c)} per unit)` : `${formatGold(c)} per unit`;
+  const perUnit = (c: number | null) => (c === null ? "unknown" : c <= 0 ? `free (the by-products more than cover the inputs, by ${formatGold(0 - c)} per unit)` : `${formatGold(c)} each`);
   const lines: string[] = [];
   const walk = (n: CostNode, depth: number) => {
     lines.push(`${"  ".repeat(depth)}${n.label}: ${money(n.copper)}`);
     for (const c of n.children) walk(c, depth + 1);
   };
-  lines.push(`Cheapest way to get one ${result.itemLabel}:`);
-  if (!result.chosen) {
-    lines.push("  UNKNOWN - a price or a policy is missing (see warnings).");
+
+  lines.push(`Cheapest way to get one ${r.itemLabel}:`);
+  lines.push(`  Buying now: ${r.buyNowUnitCost === null ? "nothing listed" : `${formatGold(r.buyNowUnitCost)} each (cheapest listing)`}`);
+  if (r.verdict === "route" && r.best) {
+    const b = r.best;
+    lines.push(`  RESULT: ${b.strategy} via ${b.via} is cheaper: ${perUnit(b.unitCost)} against ${perUnit(b.buyUnitCost)} to buy the same ${fmtUnits(fractionToNumber(b.units))} units, ${formatGold(b.savingPerUnit as number)} less per unit.`);
+  } else if (r.verdict === "buy") {
+    lines.push(`  RESULT: buying is cheaper${r.routes.some((x) => !x.joint) ? " than every route" : r.routes.length > 0 ? " (the only route is a joint product, see below)" : " (nothing else yields it)"}.`);
   } else {
-    const c = result.chosen;
-    lines.push(`  ${c.strategy} (${c.via}): ${unitMoney(c.unitCost)}` + (result.savingPerUnit === null ? "" : `, ${formatGold(result.savingPerUnit)} cheaper than the alternative`));
+    lines.push("  RESULT: UNKNOWN - a price is missing (see warnings).");
   }
-  lines.push("");
-  for (const o of [...result.options].sort((x, y) => Number(o_isChosen(result, y)) - Number(o_isChosen(result, x)))) {
-    lines.push(`${o_isChosen(result, o) ? "-> " : "   "}${o.strategy} via ${o.via}: ${unitMoney(o.unitCost)}`);
-    walk(o.tree, 2);
+
+  for (const route of r.routes) {
     lines.push("");
+    const tag = route.joint ? "  [joint product: shown for information, never recommended on its own]" : "";
+    lines.push(`${route === r.best ? "-> " : "   "}${route.strategy} via ${route.via}: ${perUnit(route.unitCost)} vs ${perUnit(route.buyUnitCost)} to buy the same ${fmtUnits(fractionToNumber(route.units))} units${tag}`);
+    walk(route.tree, 2);
   }
-  // inputs + the net line = 2 children; anything more means by-products were credited
-  if (result.options.some((o) => o.strategy !== "BUY" && o.tree.children.length > 2)) {
-    lines.push("Note: the other outputs are credited under your policy, so this only holds if you really use or sell them.");
-  }
-  for (const w of result.warnings) lines.push(`WARNING: ${w}`);
+
+  if (r.routes.some((x) => !x.joint)) lines.push("", "Note: the inputs are priced as bought on the auction house. If you make them yourself (e.g. from prospecting), use: chain");
+  if (r.routes.some((x) => x.joint)) lines.push("", "Note: for a joint product the price of the inputs is shared with everything else it yields, so the honest comparison is the whole chain: use: chain");
+  for (const w of r.warnings) lines.push(`WARNING: ${w}`);
   return lines.join("\n").trimEnd();
 }
-
-const o_isChosen = (r: CheapestCost, o: CostOption) => r.chosen === o;

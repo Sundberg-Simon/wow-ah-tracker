@@ -217,20 +217,22 @@ describe("a logged transmute in the buy-vs-run analysis", () => {
     assert.deepEqual([a.totalCredit, a.saving, a.verdict], [38_000, -22_000, "buy"]);
   });
 
-  it("is TRANSMUTE, not PROSPECT, in get_cheapest_cost, with the inputs shown in the tree", () => {
+  it("is a TRANSMUTE route, compared with buying the same units, with the inputs shown in the tree", () => {
     const { analysis, m } = setup("need");
     const r = getCheapestCost({ itemId: Y, analyses: [analysis], books: m, nameOf: (i) => ({ [X]: "Gem X", [LOTUS]: "Lotus", [Y]: "Gem Y" })[i] ?? String(i) });
-    const transmute = r.options.find((o) => o.strategy === "TRANSMUTE")!;
-    assert.ok(transmute, "the option is named after the kind of operation");
-    assert.equal(r.options.some((o) => o.strategy === "PROSPECT"), false);
-    assert.equal(transmute.unitCost, 1_579); // 60 000 / 38 units, rounded
-    assert.equal(r.options.find((o) => o.strategy === "BUY")!.unitCost, 2_000);
-    assert.equal(r.chosen, transmute);
-    assert.equal(r.savingPerUnit, 421);
-    assert.match(transmute.tree.children[0].label, /buy the inputs: 40 x Gem X, 40 x Lotus/);
+    assert.equal(r.routes.length, 1);
+    const route = r.routes[0];
+    assert.deepEqual([route.strategy, route.joint], ["TRANSMUTE", false], "named after the kind of operation, not PROSPECT");
+    assert.deepEqual(route.units, { num: 38, den: 1 });
+    assert.equal(route.unitCost, 1_579); // 60 000 / 38 units, rounded
+    assert.equal(route.buyUnitCost, 2_000); // buying the same 38 units
+    assert.equal(route.savingPerUnit, 421);
+    assert.deepEqual([r.best, r.verdict, r.buyNowUnitCost], [route, "route", 2_000]);
+    assert.match(route.tree.children[0].label, /buy the inputs: 40 x Gem X, 40 x Lotus/);
     const text = formatCheapestCost(r);
-    assert.match(text, /TRANSMUTE \(Transmute Y\)/);
-    assert.ok(!/Note: the other outputs are credited/.test(text), "a single-output operation has no by-products to warn about");
+    assert.match(text, /RESULT: TRANSMUTE via Transmute Y is cheaper/);
+    assert.match(text, /inputs are priced as bought on the auction house/);
+    assert.ok(!/joint product/.test(text), "a single-output operation has no by-products");
   });
 
   it("stays unknown until runs exist", () => {
@@ -246,7 +248,8 @@ describe("a logged transmute in the buy-vs-run analysis", () => {
     const m = market();
     const analysis = analyzeSourcing(computeEconomics(resolveOperation(db, id), m, { executions: 40 }), m, new Map());
     const r = getCheapestCost({ itemId: Y, analyses: [analysis], books: m, nameOf: String });
-    assert.deepEqual(r.options.map((o) => o.strategy), ["BUY"], "only what is known is compared");
+    assert.deepEqual(r.routes, [], "only what is known is compared");
+    assert.equal(r.verdict, "buy", "nothing else yields it as far as is known");
     assert.ok(r.warnings.some((w) => /1 operation\(s\) have no logged data yet.*Transmute Y/.test(w)));
   });
 });

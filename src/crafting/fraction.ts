@@ -40,3 +40,29 @@ export function scaleFraction(f: Fraction, k: number): Fraction {
 export function fractionToNumber(f: Fraction): number {
   return f.num / f.den;
 }
+
+export const ZERO: Fraction = { num: 0, den: 1 };
+
+function safeProduct(a: number, b: number): number {
+  const p = a * b;
+  if (!Number.isSafeInteger(p)) throw new RangeError(`Fraction overflow multiplying ${a} x ${b}`);
+  return p;
+}
+
+export function addFractions(a: Fraction, b: Fraction): Fraction {
+  return fraction(safeProduct(a.num, b.den) + safeProduct(b.num, a.den), safeProduct(a.den, b.den));
+}
+
+/** a - b; the result may be negative. */
+export function subFractions(a: Fraction, b: Fraction): Fraction {
+  return fraction(safeProduct(a.num, b.den) - safeProduct(b.num, a.den), safeProduct(a.den, b.den));
+}
+
+export function mulFractions(a: Fraction, b: Fraction): Fraction {
+  return fraction(safeProduct(a.num, b.num), safeProduct(a.den, b.den));
+}
+
+/** Negative, zero or positive as a is less than, equal to or greater than b. */
+export function compareFractions(a: Fraction, b: Fraction): number {
+  return Math.sign(safeProduct(a.num, b.den) - safeProduct(b.num, a.den));
+}
