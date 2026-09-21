@@ -926,6 +926,34 @@ eftersom.]
         historiken inte räcker. Första dygnet visar alla "collecting".
       * **Backfill**: de befintliga snapshotsen (~19 h från 2026-09-20/21)
         gav 168 historikrader direkt.
+    - **Osäkerhet i yields (2026-09-21, byggt)**: en yield är räknad ur Simons
+      egna batcher/körningar (N enheter sedda), så en sällsynt drop (River's
+      Heart ~19 sedda) kan ligga rejält fel medan en vanlig är precis. Resultatet
+      lutar på den ändå, så det syns nu (`uncertainty.ts`).
+      * **Intervallet**: ~95 % Poisson-intervall på antalet sedda enheter
+        (`poissonRange`, Wilson-Hilferty-approximation; stämmer med exakta
+        Garwood till ~0,1 för få träffar, t.ex. 19 sedda ⇒ 11,4–29,7). Enheter
+        per cast behandlas som oberoende räkningar: rätt för en sällsynt drop,
+        lite för brett för en vanlig som varierar lite (en transmute som ger 1
+        eller 2) — den säkra riktningen, och de är smala ändå. Bara MÄTT är
+        osäkert: en fast recept-output är exakt, och ett item aldrig sett har
+        ingen frekvens att ranga. `THIN_UNITS` = 30 sedda ⇒ "few seen" (ungefär
+        ±35 % eller sämre).
+      * **Yta**: gem-tabellen har kolumnen "Likely range" (enheter per batch,
+        med "few seen (N)"-badge); `prospect yields` har kolumnen "~95% range".
+      * **Känslighet** (`chainYieldSensitivity`): för VARJE uppmätt yield i
+        kedjan — besparingen om just den yielden ligger i nedre/övre änden av
+        sitt intervall, allt annat som uppmätt (en i taget, INTE ett kombinerat
+        värsta fall: alla yields fel åt samma håll samtidigt är mycket mindre
+        troligt). Största svängning först; fliken har "How sure are the
+        yields?", CLI `chain` skriver samma. Beräknas på kopior av kedjan med
+        `savingOfChain`. Viktigt: en yield med LITEN mängd sedda syns inte alltid
+        överst — det är svängningen i guld som rankar (en transmute-yield på
+        ~180 sedda men enorm volym kan svänga mer än en gem på 19). Ordningen
+        kan också vara omvänd (Pandarian Garnet: FÄRRE ger HÖGRE besparing,
+        eftersom den matar en förlustsbringande transmute) — det är korrekt.
+      * **Första riktiga körningen**: helkedjans besparing ~3 274 g; varje
+        enskild yield flyttar den som mest ~±370 g (Wild Jade-transmuten).
     - **Buy vs prospect / biprodukt-policy (2026-09-21, byggt)**: per item en
       policy i den LOKALA crafting-DB:n (`item_policy`, schema v4, `policy.ts`;
       CLI `policy set|list|clear`): **need** = används i egna crafts, värd =
