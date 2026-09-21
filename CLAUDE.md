@@ -980,7 +980,13 @@ eftersom.]
       tabell i Blizzards API (och externa källor bryter mot "bara Blizzard").
       Mappningen ilvl → id:n lärs därför in från Simons egna exporter (se
       nedan) och läggs sedan i trackedItems.json (steg 2, EJ byggt).
-    - **Steg 1 (byggt 2026-09-21, EJ verifierat i spelet)**:
+    - **Steg 1 (byggt 2026-09-21, verifierat i spelet samma dag: Simon
+      bekräftade att hjälmarna nu visas som separata ilvl-rader; `+S`/
+      export är inte separat återrapporterade)**. OBS installationen:
+      WoW läser en SEPARAT kopia i `…\_retail_\Interface\AddOns\WowAHTracker`,
+      inte repot — en ändring i `addon/` gör ingenting i spelet förrän den
+      filen kopierats dit (första försöket missade det, Simon såg oförändrat
+      beteende):
       `Categorizer.lua` delar upp gear per ilvl i bag-kolumnen
       (`GetDetailedItemLevelInfo`; gear = vapen/rustning med equip-slot;
       övrigt har inga varianter). `+S` på gear lägger till EXAKT den ilvl:en
