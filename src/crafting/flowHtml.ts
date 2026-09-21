@@ -372,7 +372,6 @@ function chainSection(model: CraftingTabModel): string {
       ? ""
       : `<h4>What each step adds compared with leaving it out</h4><table class="gems"><thead><tr><th>Step</th><th class="num">Crafts</th><th class="num">Adds</th></tr></thead><tbody>${stepRows}</tbody></table>` +
         `<p class="muted">A negative number means that step costs you more than the gems it gives are worth: you would be better off keeping the gem it uses up.</p>`) +
-    bestPlanHtml(model) +
     yieldSensitivityHtml(model)
   );
 }
@@ -402,41 +401,6 @@ function yieldSensitivityHtml(model: CraftingTabModel): string {
     `The saving leans most on <strong>${name(top.range.itemId)}</strong> (${top.range.seen} seen): it is somewhere between ${signedOrUnknown(top.savingAtLow)} and ${signedOrUnknown(top.savingAtHigh)} from that yield alone.</p>` +
     `<table class="gems"><thead><tr><th>Yield</th><th class="num">Units seen</th><th class="num">Likely range</th><th class="num">Saving at the low end</th><th class="num">Saving at the high end</th><th class="num">Swing</th></tr></thead><tbody>${body}</tbody></table>` +
     `<p class="muted">Ranges are about 95% (a Poisson interval on the units you saw); the units are treated as independent counts, which is right for a rare drop and a little too wide for a common one. Moving several yields at once would spread the saving further. More logged batches and runs narrow every row.</p>`
-  );
-}
-
-/**
- * The plan that runs only the steps that pay. Empty when it can't be decided
- * (the chain's saving is unknown - the chain section above already says so).
- */
-function bestPlanHtml(model: CraftingTabModel): string {
-  const best = model.bestChain;
-  if (!best) return "";
-  if (best.dropped.length === 0) {
-    return `<h4>Only the profitable steps</h4><p><span class="pos">Every step pays for itself</span> &mdash; running them all is the best plan.</p>`;
-  }
-  const rows = [
-    ...best.evaluation.contributions.map((c) => ({ id: c.operationId, name: c.name, run: true, effect: c.contribution })),
-    ...best.dropped.map((d) => ({ id: d.operationId, name: d.name, run: false, effect: -d.costOfIncluding })),
-  ]
-    .sort((a, b) => a.id - b.id)
-    .map(
-      (r) =>
-        `<tr class="${r.run ? "" : "muted"}"><td class="gem-name">${esc(r.name)}</td><td>${r.run ? `<span class="pos">Run</span>` : `<span class="neg">Skip</span>`}</td>` +
-        `<td class="num">${signedOrUnknown(r.effect)}</td></tr>`,
-    )
-    .join("");
-  return (
-    `<h4>Only the profitable steps</h4>` +
-    `<p>Skip <strong>${best.dropped.map((d) => esc(d.name)).join(", ")}</strong>. The best plan saves <strong>${goldOrUnknown(best.evaluation.saving)}</strong> ` +
-    `instead of ${goldOrUnknown(best.fullSaving)} &mdash; <strong>${goldOrUnknown(best.gain)}</strong> better than running every step. ` +
-    `You keep the gems a skipped step would have used up.</p>` +
-    `<table class="gems"><thead><tr><th>Step</th><th>In the best plan</th><th class="num">Effect on the saving</th></tr></thead><tbody>${rows}</tbody></table>` +
-    `<p class="muted">For a step you run, the effect is what it adds compared with leaving it out; for a skipped step it is what running it anyway would do to the saving. ` +
-    `Every combination of steps is tried, so a step that loses on its own stays when a later step makes it worth it.</p>` +
-    (best.usesLowerBounds
-      ? `<p class="warn">Some values are lower bounds (the market can't supply that many at a believable price), which leans against steps whose output can't be bought in volume &mdash; treat a close call with care.</p>`
-      : "")
   );
 }
 

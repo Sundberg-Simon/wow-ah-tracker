@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { evaluateChain, formatChain, formatOptimum, optimizeChain, planChain } from "./chain.js";
+import { evaluateChain, formatChain, planChain } from "./chain.js";
 import { openCraftingDb } from "./db.js";
 import { addFractions, compareFractions, fraction, mulFractions, subFractions, ZERO } from "./fraction.js";
 import type { PriceBook } from "./market.js";
@@ -200,87 +200,5 @@ describe("evaluateChain (hand-checked)", () => {
     assert.match(text, /you save 1\.95g/);
     assert.match(text, /Transmute A to C\s+5 crafts\s+\+1\.00g/);
     assert.match(text, /Break-even price for Ore: 0\.06g each/);
-  });
-});
-
-describe("optimizeChain (only the steps that pay)", () => {
-  // C at 1 000 makes the transmute a loser: with it the chain saves 5 500 (cost 10 500, worth 16 000); without it the
-  // 5 Gem A are simply kept (5 x 1 500) and the saving is 9 500 (cost 8 000, worth 17 500).
-  const cheapC = () => market({ [C]: book(C, [[1_000, 99]]) });
-
-  it("drops a step that costs more than the gem it uses up, and says how much better that is", () => {
-    const { root, t } = fixture();
-    const o = optimizeChain({ root, rootExecutions: 10, others: [t], books: cheapC(), policies: need(A, B, C), nameOf })!;
-    assert.deepEqual(o.kept, []);
-    assert.deepEqual(o.dropped, [{ operationId: t.operationId, name: "Transmute A to C", costOfIncluding: 4_000 }]);
-    assert.equal(o.fullSaving, 5_500);
-    assert.equal(o.evaluation.saving, 9_500);
-    assert.equal(o.gain, 4_000);
-    assert.equal(o.evaluation.plan.steps.length, 1, "only the root is left");
-  });
-
-  it("keeps every step when they all pay, and reports no gain", () => {
-    const { root, t } = fixture();
-    const o = optimizeChain({ root, rootExecutions: 10, others: [t], books: market(), policies: need(A, B, C), nameOf })!;
-    assert.deepEqual(o.kept.map((k) => k.name), ["Transmute A to C"]);
-    assert.deepEqual(o.dropped, []);
-    assert.equal(o.gain, 0);
-    assert.equal(o.evaluation.saving, 19_500);
-  });
-
-  it("judges steps together: one that loses alone stays when the step after it makes it worth it", () => {
-    const { db, root, t } = fixture();
-    const D = 2004;
-    const u = resolveOperation(db, addOperation(db, { kind: "craft", name: "C to D", inputs: [{ itemId: C, quantity: 1 }], outputs: [{ itemId: D, expected: fraction(1, 1) }] }));
-    const books = market({ [C]: book(C, [[1_000, 99]]), [D]: book(D, [[10_000, 99]]) });
-    const o = optimizeChain({ root, rootExecutions: 10, others: [t, u], books, policies: need(A, B, C, D), nameOf })!;
-    assert.deepEqual(o.kept.map((k) => k.name), ["Transmute A to C", "C to D"]);
-    assert.deepEqual(o.dropped, []);
-    assert.equal(o.evaluation.saving, 59_500);
-  });
-
-  it("when two steps compete for the same gem, picks the one that pays and drops the other", () => {
-    const { db, root, t } = fixture();
-    const D = 2004;
-    const v = resolveOperation(db, addOperation(db, { kind: "craft", name: "A to D", inputs: [{ itemId: A, quantity: 1 }], outputs: [{ itemId: D, expected: fraction(1, 1) }] }));
-    const books = market({ [C]: book(C, [[1_000, 99]]), [D]: book(D, [[10_000, 99]]) });
-    const o = optimizeChain({ root, rootExecutions: 10, others: [t, v], books, policies: need(A, B, C, D), nameOf })!;
-    assert.deepEqual(o.kept.map((k) => k.name), ["A to D"]);
-    assert.deepEqual(o.dropped.map((d) => d.name), ["Transmute A to C"]);
-    assert.equal(o.evaluation.saving, 52_000); // 5 D (50 000) + 1 B (10 000) - 8 000 of ore
-    assert.equal(o.fullSaving, 5_500, "run in order, the first step takes every Gem A");
-  });
-
-  it("does not decide when the saving is unknown (a policy is missing), instead of letting a step that avoids it win", () => {
-    const { root, t } = fixture();
-    assert.equal(optimizeChain({ root, rootExecutions: 10, others: [t], books: cheapC(), policies: need(A, B), nameOf }), null);
-  });
-
-  it("ignores steps with nothing to run on: they are neither kept nor dropped", () => {
-    const { db, root, t } = fixture();
-    const nothing = resolveOperation(db, addOperation(db, { kind: "craft", name: "Uses something else", inputs: [{ itemId: 9999, quantity: 1 }], outputs: [{ itemId: C, expected: fraction(1, 1) }] }));
-    const o = optimizeChain({ root, rootExecutions: 10, others: [t, nothing], books: cheapC(), policies: need(A, B, C), nameOf })!;
-    assert.deepEqual(o.dropped.map((d) => d.name), ["Transmute A to C"]);
-    assert.deepEqual(o.kept, []);
-  });
-
-  it("says when a value it leans on is a lower bound", () => {
-    const { root, t } = fixture();
-    // Only 4 Gem C exist at a believable price but the chain ends with 6.
-    const thin = market({ [C]: book(C, [[1_000, 4]]) });
-    assert.equal(optimizeChain({ root, rootExecutions: 10, others: [t], books: thin, policies: need(A, B, C), nameOf })!.usesLowerBounds, true);
-    assert.equal(optimizeChain({ root, rootExecutions: 10, others: [t], books: cheapC(), policies: need(A, B, C), nameOf })!.usesLowerBounds, false);
-    assert.match(formatOptimum(optimizeChain({ root, rootExecutions: 10, others: [t], books: thin, policies: need(A, B, C), nameOf })).join("\n"), /lower bounds/);
-  });
-
-  it("renders the plan as text", () => {
-    const { root, t } = fixture();
-    const o = optimizeChain({ root, rootExecutions: 10, others: [t], books: cheapC(), policies: need(A, B, C), nameOf });
-    const text = formatOptimum(o).join("\n");
-    assert.match(text, /Best plan: skip Transmute A to C\./);
-    assert.match(text, /Saving 0\.95g instead of 0\.55g - 0\.40g better than running every step\./);
-    assert.match(text, /forcing it back in would cost you 0\.40g/);
-    assert.match(formatOptimum(optimizeChain({ root, rootExecutions: 10, others: [t], books: market(), policies: need(A, B, C), nameOf })).join("\n"), /every step pays for itself/);
-    assert.match(formatOptimum(null).join("\n"), /not decided/);
   });
 });

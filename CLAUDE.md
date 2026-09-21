@@ -840,8 +840,8 @@ eftersom.]
         pris") → värdet blir en flaggad NEDRE GRÄNS, inköpet blir okänt,
         `procure` ser köp som ej genomförbart. Gäller överallt (chain,
         procure, sourcing, tunn-marknad-flaggan). Hela kedjan antar att ALLA
-        hållna input-gems transmuteras; "bara de lönsamma stegen" finns sedan
-        2026-09-21 som ett separat bästa-plan-svar (se nedan).
+        hållna input-gems transmuteras — avsiktligt, valet är allt-eller-inget
+        (en "bara de lönsamma stegen"-plan byggdes och togs bort, se nedan).
     - **"Är det värt att crafta?" — verdiktet, uppifrån och ner (2026-09-21,
       byggt)**: Simons fråga är beslutsvänd: FÖRST "är Living Steel värt att
       crafta?", och BARA om ja: "är Trillium Bar värt att crafta, och hur?" —
@@ -872,31 +872,16 @@ eftersom.]
         billigare, medan Living Steel förblev "köp" (~11 % dyrare att crafta,
         drivet av Spirit of Harmony ~60 % av kostnaden). Tolka det som ett
         läge, inte en dom; break-even-priserna i verdiktet är det stabila.
-    - **Bästa plan: bara de lönsamma stegen (2026-09-21, byggt)**:
-      helkedjan kör varje transmute på ALLA hållna gems, så ett steg som
-      kostar mer än gemet det gör slut på dras med. `optimizeChain`
-      (`chain.ts`) planerar och värderar VARJE kombination av stegen (bara
-      steg som kan köra alls; 2^n, tak `MAX_OPTIMIZED_STEPS` = 12 — över det
-      returneras null) och väljer störst besparing, vid lika färre crafts.
-      * **Varför inte ett-steg-i-taget**: steg matar varandra (ett steg som
-        förlorar ensamt kan vara värt det för nästa) och konkurrerar om samma
-        gem (körs i ordning, så det första tar allt). Bara uttömmande sökning
-        hittar rätt kombination; tester täcker båda fallen.
-      * **Ärlighet**: är helkedjans besparing OKÄND (saknad policy/pris) avgör
-        den INTE (null) — annars kunde ett delmängds-val som råkar undvika det
-        saknade "vinna". Innehåller något värde en NEDRE GRÄNS (marknaden kan
-        inte leverera så många till rimligt pris) sätts `usesLowerBounds` och
-        CLI/flik varnar: en undervärderad output lutar jämförelsen mot steg
-        vars output inte går att köpa i volym. Ta en knapp gräns med försiktighet.
-      * **Yta**: CLI `chain` skriver "Best plan: skip …" under helkedjan
-        (vad man kör, vad man hoppar, vad det kostar att tvinga tillbaka ett
-        steg); fliken har "Only the profitable steps" under stegtabellen;
-        konsolsammanfattningen i `report:earnings` får en rad. Helkedjan och
-        flödesgrafen visar fortfarande hela planen.
-      * **Första riktiga körningen 2026-09-21**: hoppa över Sun's Radiance och
-        Primordial Ruby ⇒ ~5 479 g mot ~3 274 g för helkedjan — men båda
-        stegens output var nedre gräns (varningen visades), så det är en
-        indikation, inte en dom.
+    - **Bästa plan / "bara de lönsamma stegen" — byggd och SEDAN BORTTAGEN
+      (2026-09-21)**: en `optimizeChain` som provade varje kombination av
+      kedjans steg och rekommenderade att hoppa över förlustbringande
+      transmutes. Simon avfärdade den: beslutet är allt-eller-inget (köp
+      Kyparite och crafta alla fyra gem-typer, eller köp gemsen direkt), och
+      modellen räknade dessutom inte in att ett överhoppat steg lämnar en gem
+      man ändå behöver ATT KÖPA — rekommendationen kunde se lönsam ut utan att
+      vara det. Föreslå inte per-steg-/per-gem-val igen; jämför hela vägar
+      (kostnad att göra X mot att köpa X). Helkedjan antar därför fortsatt att
+      alla hållna input-gems transmuteras, och det är rätt frågeställning.
     - **Prishistorik och trend (2026-09-21, byggt)**: ett pris ensamt säger
       lite (Kyparite föll ~40 % på en timme); det som avgör NÄR man köper är
       var dagens pris ligger bland veckans.

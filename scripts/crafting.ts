@@ -13,7 +13,7 @@ import {
 import { craftingDbPath, openCraftingDb } from "../src/crafting/db.js";
 import { fetchItemName, searchItemsByName, type StaticGet } from "../src/crafting/itemLookup.js";
 import { fetchCommodityDump } from "../src/crafting/blizzardMarket.js";
-import { evaluateChain, formatChain, formatOptimum, optimizeChain } from "../src/crafting/chain.js";
+import { evaluateChain, formatChain } from "../src/crafting/chain.js";
 import { getCheapestCost } from "../src/crafting/cheapest.js";
 import { chainYieldSensitivity, formatSensitivity } from "../src/crafting/uncertainty.js";
 import { formatTrend, snapshotPrices, trendFor, watchedItemIds, TREND_WINDOW_DAYS } from "../src/crafting/history.js";
@@ -409,8 +409,6 @@ async function main(): Promise<void> {
       const chainArgs = { root, rootExecutions: inputUnits / perExecution, others, books: prices.books, policies: getPolicies(db), nameOf };
       const evaluated = evaluateChain(chainArgs);
       console.log(formatChain(evaluated, nameOf));
-      console.log("");
-      console.log(formatOptimum(optimizeChain(chainArgs)).join("\n"));
       console.log("");
       console.log(formatSensitivity(chainYieldSensitivity(chainArgs), evaluated.saving, nameOf, formatGold).join("\n"));
     } else if (group === "worth") {
