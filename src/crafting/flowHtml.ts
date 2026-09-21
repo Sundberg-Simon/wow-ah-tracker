@@ -1,6 +1,7 @@
 import { fractionToNumber, type Fraction } from "./fraction.js";
 import { layerNodes, type FlowEdge, type FlowNode, type ItemNode, type OperationNode } from "./flow.js";
 import type { CraftingTabModel } from "./craftingReport.js";
+import { yieldRanges, THIN_UNITS, type YieldRange } from "./uncertainty.js";
 import { CHEAP_AT, DEAR_AT, MIN_SPAN_HOURS, MIN_TREND_SAMPLES, TREND_WINDOW_DAYS, type Trend } from "./history.js";
 import { formatGold } from "./money.js";
 import type { ResolvedOperation } from "./operations.js";
@@ -57,7 +58,7 @@ export const CRAFTING_CSS = `
   .badge.cheap { background: #16a34a33; color: #15803d; }
   .badge.dear { background: #dc262633; color: #b91c1c; }
   .badge.typical { background: #88888833; color: #666; }
-  .badge.collecting { background: #f59e0b33; color: #b45309; }
+  .badge.collecting, .badge.few { background: #f59e0b33; color: #b45309; }
   .chain-tables > div { flex: 1 1 320px; }
 `;
 
@@ -206,7 +207,16 @@ function summaryTable(model: CraftingTabModel): string {
   );
 }
 
-function gemRow(g: GemSourcing, totalCredit: number | null, nameOf: (id: number) => string): string {
+/** The ~95 % range of a measured yield in units per batch, with a marker when few were seen; a dash for an exact one. */
+function rangeCell(range: YieldRange | undefined, executions: number): string {
+  if (!range) return `<span class="muted" title="Exact (a recipe's fixed output) or never seen, so there is nothing to range.">&mdash;</span>`;
+  const text = `${units(range.low * executions)} &ndash; ${units(range.high * executions)}`;
+  return range.thin
+    ? `${text} <span class="badge few" title="Only ${range.seen} unit(s) were seen in your logged data (fewer than ${THIN_UNITS}), so this yield could plausibly be off by about ${Math.round(range.relativeHalfWidth * 100)}%. More batches or runs narrow it.">few seen (${range.seen})</span>`
+    : `${text} <span class="muted" title="${range.seen} units seen">(${range.seen} seen)</span>`;
+}
+
+function gemRow(g: GemSourcing, totalCredit: number | null, nameOf: (id: number) => string, range?: YieldRange, executions = 0): string {
   const dash = `<span class="muted">&mdash;</span>`;
   const unitsText = units(g.expectedUnits.num / g.expectedUnits.den);
   const bound = g.buyLowerBound ? ` <span class="warn" title="The market cannot supply this many units; this is only the part that can be bought.">lower bound</span>` : "";
@@ -216,6 +226,7 @@ function gemRow(g: GemSourcing, totalCredit: number | null, nameOf: (id: number)
   return (
     `<tr class="${ignored ? "muted" : ""}"><td class="gem-name">${esc(nameOf(g.itemId))}</td><td>${policyBadge(g.policy)}</td>` +
     `<td class="num">${unitsText}</td>` +
+    `<td class="num">${rangeCell(range, executions)}</td>` +
     `<td class="num">${ignored ? dash : goldOrUnknown(g.buyCost) + bound}</td>` +
     `<td class="num">${goldOrUnknown(g.credit)}</td>` +
     `<td class="num">${share === null ? dash : share}</td>` +
@@ -228,13 +239,15 @@ function gemTable(model: CraftingTabModel, nameOf: (id: number) => string): stri
   return model.sourcing
     .filter((s) => s.gems.length > 0 && model.shownOperationIds.has(s.economics.operation.operationId))
     .map((s) => {
+      const ranges = yieldRanges(s.economics.operation);
       const rows = [...s.gems]
         .sort((a, b) => (b.credit ?? -1) - (a.credit ?? -1) || a.itemId - b.itemId)
-        .map((g) => gemRow(g, s.totalCredit, nameOf))
+        .map((g) => gemRow(g, s.totalCredit, nameOf, ranges.get(g.itemId), s.economics.executions))
         .join("");
       return (
         `<h3>${esc(s.economics.operation.name)}: each gem</h3>` +
-        `<table class="gems"><thead><tr><th>Gem</th><th>You</th><th class="num">Units per batch</th><th class="num">Buying that many now</th>` +
+        `<table class="gems"><thead><tr><th>Gem</th><th>You</th><th class="num">Units per batch</th>` +
+        `<th class="num" title="About 95% range of the units per batch, from how many of it you actually saw. A rare drop rests on few observations and can be well off; the units are treated as independent counts.">Likely range</th><th class="num">Buying that many now</th>` +
         `<th class="num">Worth to you</th><th class="num" title="Its share of everything the batch is worth to you. A big share means the result leans on that one gem's price.">Share of value</th>` +
         `<th class="num" title="The input cost is shared between the gems in proportion to their value. Each row's saving is its worth minus its share of the cost, so the rows add up to the total saving.">Saving (cost shared by value)</th>` +
         `<th class="num">Buy, per unit</th></tr></thead>` +
@@ -359,7 +372,36 @@ function chainSection(model: CraftingTabModel): string {
       ? ""
       : `<h4>What each step adds compared with leaving it out</h4><table class="gems"><thead><tr><th>Step</th><th class="num">Crafts</th><th class="num">Adds</th></tr></thead><tbody>${stepRows}</tbody></table>` +
         `<p class="muted">A negative number means that step costs you more than the gems it gives are worth: you would be better off keeping the gem it uses up.</p>`) +
-    bestPlanHtml(model)
+    bestPlanHtml(model) +
+    yieldSensitivityHtml(model)
+  );
+}
+
+/**
+ * How much the chain's saving leans on each measured yield: the saving if that ONE yield is at the low / high end of its
+ * ~95 % range. A rare drop rests on few observations, and this shows what that is worth in gold.
+ */
+function yieldSensitivityHtml(model: CraftingTabModel): string {
+  const rows = model.yieldSensitivity.filter((r) => r.swing > 0).slice(0, 6);
+  if (rows.length === 0 || model.chain?.saving == null) return "";
+  const name = (id: number) => esc(model.itemNames.get(id) ?? String(id));
+  const body = rows
+    .map(
+      (r) =>
+        `<tr><td class="gem-name">${name(r.range.itemId)} <span class="muted">${esc(r.operationName)}</span></td>` +
+        `<td class="num">${r.range.seen}${r.range.thin ? ` <span class="badge few" title="Fewer than ${THIN_UNITS} units seen: a thin yield.">few</span>` : ""}</td>` +
+        `<td class="num">&plusmn;${Math.round(r.range.relativeHalfWidth * 100)}%</td>` +
+        `<td class="num">${signedOrUnknown(r.savingAtLow)}</td><td class="num">${signedOrUnknown(r.savingAtHigh)}</td>` +
+        `<td class="num">${formatGold(r.swing)}</td></tr>`,
+    )
+    .join("");
+  const top = rows[0];
+  return (
+    `<h4>How sure are the yields?</h4>` +
+    `<p>The saving is <strong>${signedOrUnknown(model.chain.saving)}</strong> with the yields as measured. Each row moves ONE yield to the end of its likely range (everything else as measured). ` +
+    `The saving leans most on <strong>${name(top.range.itemId)}</strong> (${top.range.seen} seen): it is somewhere between ${signedOrUnknown(top.savingAtLow)} and ${signedOrUnknown(top.savingAtHigh)} from that yield alone.</p>` +
+    `<table class="gems"><thead><tr><th>Yield</th><th class="num">Units seen</th><th class="num">Likely range</th><th class="num">Saving at the low end</th><th class="num">Saving at the high end</th><th class="num">Swing</th></tr></thead><tbody>${body}</tbody></table>` +
+    `<p class="muted">Ranges are about 95% (a Poisson interval on the units you saw); the units are treated as independent counts, which is right for a rare drop and a little too wide for a common one. Moving several yields at once would spread the saving further. More logged batches and runs narrow every row.</p>`
   );
 }
 

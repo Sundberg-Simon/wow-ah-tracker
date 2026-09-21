@@ -254,6 +254,18 @@ export function evaluateChain(args: {
   return { plan, ...totals, contributions, breakEvenRootInputPrice: breakEven, warnings };
 }
 
+/** Just the saving of running every step of a chain (no contributions), for callers that evaluate many variations. */
+export function savingOfChain(args: {
+  root: ResolvedOperation;
+  rootExecutions: number;
+  others: readonly ResolvedOperation[];
+  books: ReadonlyMap<number, PriceBook>;
+  policies: ReadonlyMap<number, Policy>;
+  nameOf: (itemId: number) => string;
+}): number | null {
+  return valuePlan(planChain({ root: args.root, rootExecutions: args.rootExecutions, others: args.others }), args.books, args.policies, args.nameOf).saving;
+}
+
 // ---- the best plan: only the steps that pay ----
 
 /** More further steps than this and every combination is no longer tried (2^12 = 4 096 plans is instant; 2^30 is not). */

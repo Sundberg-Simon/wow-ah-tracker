@@ -528,6 +528,11 @@ describe("craftingTabHtml", () => {
     assert.match(html, /stays worth it until Test Ore costs about/);
     assert.match(html, /Only the profitable steps/);
     assert.match(html, /Every step pays for itself/, "the transmute pays here, so nothing is skipped");
+    // Yield certainty: Gem B was seen 20 times (thin), and the chain's saving is shown against each measured yield.
+    assert.match(html, /<th class="num" title="[^"]*">Likely range<\/th>/);
+    assert.match(html, /<span class="badge few"[^>]*>few seen \(20\)<\/span>/, "the rarely seen gem is marked");
+    assert.match(html, /How sure are the yields\?/);
+    assert.match(html, /leans most on/);
   });
 
   it("says where today's price sits in the week: collecting at first, dear after a day of history", async () => {

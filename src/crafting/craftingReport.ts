@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { evaluateChain, optimizeChain, type ChainEvaluation, type ChainOptimum } from "./chain.js";
 import { backfillHistory, trendFor, watchedItemIds, type Trend } from "./history.js";
+import { chainYieldSensitivity, type YieldSensitivity } from "./uncertainty.js";
 import { buildFlowGraph, type FlowGraph } from "./flow.js";
 import { getItemName } from "./items.js";
 import type { CommodityDumpFetcher } from "./market.js";
@@ -39,6 +40,8 @@ export interface CraftingTabModel {
   bestChain: ChainOptimum | null;
   /** Where today's price sits among the last week's, for what the chain buys and what you need (see history.ts). */
   trends: { itemId: number; role: "buy" | "need"; trend: Trend }[];
+  /** How far the chain's saving moves if one measured yield is at the end of its ~95 % range (largest swing first). */
+  yieldSensitivity: YieldSensitivity[];
   /** The operations shown in the summary, flow and per-item table: the chain's, or every operation with known outputs when there is no chain. */
   shownOperationIds: Set<number>;
   /** For each needed item the shown operations don't make: how to end up with `units` of it, sourcing every input the cheapest way. */
@@ -90,6 +93,11 @@ export async function buildCraftingModel(args: {
     chainRoot && chainOthers.length > 0
       ? optimizeChain({ root: chainRoot, rootExecutions: executions, others: chainOthers, books: prices.books, policies, nameOf })
       : null;
+
+  const yieldSensitivity =
+    chainRoot && chainOthers.length > 0 && chain?.saving != null
+      ? chainYieldSensitivity({ root: chainRoot, rootExecutions: executions, others: chainOthers, books: prices.books, policies, nameOf })
+      : [];
 
   // Price trends: the items the chain buys (when is a good time to buy?), then the other items you need.
   backfillHistory(db);
@@ -164,6 +172,7 @@ export async function buildCraftingModel(args: {
     chain,
     bestChain,
     trends,
+    yieldSensitivity,
     shownOperationIds,
     procurements,
     itemNames,

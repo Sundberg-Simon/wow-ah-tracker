@@ -15,6 +15,7 @@ import { fetchItemName, searchItemsByName, type StaticGet } from "../src/craftin
 import { fetchCommodityDump } from "../src/crafting/blizzardMarket.js";
 import { evaluateChain, formatChain, formatOptimum, optimizeChain } from "../src/crafting/chain.js";
 import { getCheapestCost } from "../src/crafting/cheapest.js";
+import { chainYieldSensitivity, formatSensitivity } from "../src/crafting/uncertainty.js";
 import { formatTrend, snapshotPrices, trendFor, watchedItemIds, TREND_WINDOW_DAYS } from "../src/crafting/history.js";
 import { fractionToNumber } from "../src/crafting/fraction.js";
 import { formatGold } from "../src/crafting/money.js";
@@ -406,9 +407,12 @@ async function main(): Promise<void> {
       if (prices.error) console.warn(`  ${prices.error}`);
       console.log("");
       const chainArgs = { root, rootExecutions: inputUnits / perExecution, others, books: prices.books, policies: getPolicies(db), nameOf };
-      console.log(formatChain(evaluateChain(chainArgs), nameOf));
+      const evaluated = evaluateChain(chainArgs);
+      console.log(formatChain(evaluated, nameOf));
       console.log("");
       console.log(formatOptimum(optimizeChain(chainArgs)).join("\n"));
+      console.log("");
+      console.log(formatSensitivity(chainYieldSensitivity(chainArgs), evaluated.saving, nameOf, formatGold).join("\n"));
     } else if (group === "worth") {
       const target = resolveItem(db, [action, ...rest].filter(Boolean).join(" "));
       const wantedUnits = values.units ? parseCount("--units", values.units) : 100;
