@@ -108,7 +108,12 @@ const MIGRATIONS: string[] = [
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
 
-export function openCraftingDb(path: string = process.env.CRAFTING_DB_PATH ?? DEFAULT_DB_PATH): DatabaseSync {
+/** The DB file in use: CRAFTING_DB_PATH if set, otherwise the default under data-private/. */
+export function craftingDbPath(): string {
+  return process.env.CRAFTING_DB_PATH ?? DEFAULT_DB_PATH;
+}
+
+export function openCraftingDb(path: string = craftingDbPath()): DatabaseSync {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
   // Off by default in SQLite and per-connection: without it ON DELETE CASCADE

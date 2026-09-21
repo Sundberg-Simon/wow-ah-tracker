@@ -95,6 +95,13 @@ try {
         Write-Status "FAILED: report generation exited $reportExit - the ingest itself succeeded and is in the DB; only reports-private/earnings.html is stale."
         exit $reportExit
     }
+    # Back up the local crafting DB as well (prospecting batches are irreplaceable and live in one
+    # gitignored file; the report step above just added price history to it). Best-effort: a failed
+    # backup is reported but never fails the push.
+    $backupExit = Invoke-NpmScript "crafting -- backup create"
+    if ($backupExit -ne 0) {
+        Write-Status "WARNING: crafting DB backup exited $backupExit - see the output above. The earnings push itself succeeded."
+    }
     Write-Status "DONE: earnings ingested and reports-private/earnings.html regenerated."
     exit 0
 } catch {

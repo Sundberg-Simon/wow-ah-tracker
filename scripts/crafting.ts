@@ -1,6 +1,16 @@
+import { existsSync } from "node:fs";
+import type { DatabaseSync } from "node:sqlite";
 import { parseArgs } from "node:util";
 import { blizzardGet } from "../src/blizzard-api/client.js";
-import { openCraftingDb } from "../src/crafting/db.js";
+import {
+  backupConfig,
+  createBackup,
+  listBackups,
+  restoreBackup,
+  verifyBackupFile,
+  type BackupResult,
+} from "../src/crafting/backup.js";
+import { craftingDbPath, openCraftingDb } from "../src/crafting/db.js";
 import { fetchItemName, searchItemsByName, type StaticGet } from "../src/crafting/itemLookup.js";
 import { describeItem, listItems, resolveItem, setItemName } from "../src/crafting/items.js";
 import {
@@ -41,6 +51,17 @@ const USAGE = `WoW Crafting Optimizer - local data CLI (data-private/crafting.sq
   npm run crafting -- op show <id|name>
   npm run crafting -- op remove <id>
 
+  npm run crafting -- backup create                   snapshot + verify (also runs automatically after every change)
+  npm run crafting -- backup list
+  npm run crafting -- backup verify [<name|path>]     default: the newest backup
+  npm run crafting -- backup restore <name|path> --yes   replace the live DB (the old one is kept aside)
+
+Backups: data-private/backups/, each in its own timestamped file. Everything from the last 24 hours
+is kept (so a backup made right after a mistake never overwrites the good one), then the newest per
+day for 30 days. Set CRAFTING_BACKUP_EXTRA_DIR in
+.env to also copy each backup to another drive or a cloud-synced folder (a same-disk copy can't
+survive losing the disk).
+
 A batch is a COMPLETE record: list every output item you got. Anything you leave
 out counts as 0 for that batch's ore, which lowers its yield.
 --count is the total ore consumed (e.g. 100000), not the number of casts.
@@ -51,6 +72,84 @@ name (same name, several ids) is refused - use the id.`;
 
 // Blizzard static-namespace GET via the sync pipeline's OAuth client (only touched by item find/fetch).
 const staticGet: StaticGet = (path, params) => blizzardGet(path, { namespace: "static", params });
+
+// Commands that change the stored data. Each one is followed by an automatic backup: that is the
+// moment new, irreplaceable observations exist.
+const WRITE_COMMANDS = new Set(["item add", "item fetch", "op add", "op remove", "prospect add", "prospect remove"]);
+
+const kb = (bytes: number) => `${(bytes / 1024).toFixed(1)} KB`;
+
+function printBackup(r: BackupResult): void {
+  const counts = Object.entries(r.rowCounts)
+    .filter(([, n]) => n > 0)
+    .map(([t, n]) => `${t} ${n}`)
+    .join(", ");
+  console.log(`Backup: ${r.path} (${kb(r.bytes)}; ${counts || "empty"})`);
+  for (const p of r.copiedTo) console.log(`  also copied to ${p}`);
+  if (r.pruned.length > 0) console.log(`  removed ${r.pruned.length} old backup(s)`);
+  for (const w of r.warnings) console.warn(`  Warning: ${w}`);
+}
+
+/** Never fails the command: the change itself is already saved. */
+function autoBackup(db: DatabaseSync): void {
+  try {
+    printBackup(createBackup(db, backupConfig()));
+  } catch (err) {
+    console.warn(`Warning: your change was saved, but the automatic backup FAILED: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/** A backup given by file name (looked up in the backup folder), by path, or omitted = the newest one. */
+function resolveBackupPath(arg: string | undefined): string {
+  const config = backupConfig();
+  if (!arg) {
+    const newest = listBackups(config.dir)[0];
+    if (!newest) throw new ValidationError(`no backups found in ${config.dir}`);
+    return newest.path;
+  }
+  if (existsSync(arg)) return arg;
+  const inDir = `${config.dir}/${arg}`;
+  if (existsSync(inDir)) return inDir;
+  throw new ValidationError(`backup not found: ${arg}`);
+}
+
+/** The backup commands that must NOT hold the database open (restore replaces the file itself). */
+function runBackupCommand(action: string | undefined, rest: string[], yes: boolean): boolean {
+  const config = backupConfig();
+  if (action === "list") {
+    for (const [label, dir] of [["Backups in", config.dir], ["Extra copies in", config.extraDir]] as const) {
+      if (!dir) continue;
+      const files = listBackups(dir);
+      console.log(`${label} ${dir}: ${files.length === 0 ? "none" : ""}`);
+      for (const f of files) console.log(`  ${f.name}  ${kb(f.bytes).padStart(9)}  ${f.modified.toLocaleString("sv-SE")}`);
+    }
+    return true;
+  }
+  if (action === "verify") {
+    const path = resolveBackupPath(rest[0]);
+    const v = verifyBackupFile(path);
+    console.log(`${v.ok ? "OK" : "FAILED"}: ${path}`);
+    if (v.ok) console.log(`  schema v${v.userVersion}; ${Object.entries(v.rowCounts).map(([t, n]) => `${t} ${n}`).join(", ")}`);
+    for (const p of v.problems) console.error(`  ${p}`);
+    if (!v.ok) process.exitCode = 1;
+    return true;
+  }
+  if (action === "restore") {
+    const path = resolveBackupPath(rest[0]);
+    const target = craftingDbPath();
+    if (!yes) {
+      console.log(`Would replace ${target} with ${path}.`);
+      console.log("The current database is copied aside first. Close anything using it, then run again with --yes.");
+      process.exitCode = 1;
+      return true;
+    }
+    const r = restoreBackup(path, target);
+    console.log(`Restored ${r.target} from ${r.restoredFrom}.`);
+    if (r.safetyCopy) console.log(`The database that was replaced is kept as ${r.safetyCopy}.`);
+    return true;
+  }
+  return false;
+}
 
 async function main(): Promise<void> {
   const { positionals, values } = parseArgs({
@@ -71,6 +170,7 @@ async function main(): Promise<void> {
       output: { type: "string", multiple: true },
       "from-prospecting": { type: "string" },
       source: { type: "string" },
+      yes: { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -78,6 +178,17 @@ async function main(): Promise<void> {
   if (values.help || !group) {
     console.log(USAGE);
     return;
+  }
+
+  if (group === "backup" && action !== "create") {
+    try {
+      if (runBackupCommand(action, rest, values.yes ?? false)) return;
+    } catch (err) {
+      if (!(err instanceof ValidationError)) throw err;
+      console.error(`Error: ${err.message}`);
+      process.exitCode = 1;
+      return;
+    }
   }
 
   const db = openCraftingDb();
@@ -163,10 +274,13 @@ async function main(): Promise<void> {
         to: values.to,
       });
       console.log(formatYields(db, observed, values.per ? parseCount("--per", values.per) : 100));
+    } else if (group === "backup" && action === "create") {
+      printBackup(createBackup(db, backupConfig()));
     } else {
       console.error(USAGE);
       process.exitCode = 1;
     }
+    if (WRITE_COMMANDS.has(`${group} ${action}`)) autoBackup(db);
   } catch (err) {
     if (err instanceof ValidationError) {
       console.error(`Error: ${err.message}`);

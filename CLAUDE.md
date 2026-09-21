@@ -667,6 +667,45 @@ eftersom.]
       * Passar redan i strukturen: `get_cheapest_cost(item)` = min(BUY,
         PROSPECT-via-Kyparite, ...) med förklarande träd; en operation med
         flera outputs behöver en explicit allokeringsregel (ovan).
+    - **Backup av crafting-DB:n (2026-09-21)**: Simons prospecting-batcher är
+      oersättliga observationer och ligger i EN gitignorerad fil, så de
+      backas upp (`src/crafting/backup.ts`, `npm run crafting -- backup
+      create|list|verify|restore`).
+      * Backupen görs med `VACUUM INTO` (konsekvent ögonblicksbild, inte en
+        filkopia mitt i en skrivning) och VERIFIERAS innan något ersätts
+        eller gallras: integrity_check + radantal per tabell + schemaversion
+        mot källan. Fallerar verifieringen kastas fel och ingen gammal backup
+        rörs.
+      * **Varje backup är en egen tidsstämplad fil** (`crafting-YYYY-MM-DD-
+        HHMMSS.sqlite` i `data-private/backups/`). En första design med en fil
+        per dag övergavs: den automatiska backupen efter varje ändring skrev
+        då över dagens fil, så ett misstag (t.ex. fel `prospect remove`) kunde
+        ta bort det goda tillståndet från just innan. Gallring: ALLT från
+        senaste 24 h, därefter den senaste per kalenderdag i 30 dagar.
+      * **Automatisk backup efter varje datandrande kommando** (`item add/
+        fetch`, `op add/remove`, `prospect add/remove`) — det är då nya
+        observationer finns — samt som sista steg i `Push-Earnings.ps1`
+        (best-effort, fäller aldrig pushen). Ett misslyckat auto-backup ger
+        en varning men ångrar inte ändringen.
+      * **`backup restore <fil> --yes`** ersätter den levande DB:n med en
+        verifierad backup; den ersatta DB:n sparas först som
+        `crafting-pre-restore-<tid>.sqlite`, så en felaktig återställning kan
+        ångras. Utan `--yes` görs ingenting. DB:n får inte vara öppen i
+        annat program.
+      * **En kopia på samma disk skyddar bara mot korruption och misstag, inte
+        mot förlorad disk.** `CRAFTING_BACKUP_EXTRA_DIR` (i `.env`, lokal)
+        kopierar varje backup även till en annan enhet/molnmapp; av = ingen
+        extern kopia. Att välja mapp laddar upp datan till molnet och är
+        Simons val, inte något att slå på tyst.
+      * **Satt 2026-09-21: Google Drive**, `G:\Min enhet\wow-ah-tracker-backups`
+        (egen undermapp; Simon föredrar Google Drive, inget annat i projektet
+        använder OneDrive). Mappen verifierades finnas innan `.env` ändrades;
+        provkörd: kopian är byte-identisk med den lokala och verifierar OK.
+        Värdet ligger i den lokala `.env` (gitignorerad), inte i koden.
+        Fallgrop: `npm run ... -- backup verify "<sökväg med mellanslag>"`
+        splittras av npm på Windows — kör `npx tsx scripts/crafting.ts backup
+        verify "<sökväg>"` direkt, eller ange bara filnamn (söks i den lokala
+        backupmappen).
     - **Realm-scope (avgjort 2026-09-20)**: motorn jobbar på connected-realm-
       nivå. De 81 relevanta klustren = de connected realms där Simons rostrade
       karaktärer (`/waht realms` → `roster_characters`) finns — INTE en
