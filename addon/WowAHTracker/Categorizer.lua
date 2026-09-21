@@ -34,10 +34,88 @@ local function GetAllBagIDs()
 	return bags
 end
 
--- Dedupes by item id (a stack split across multiple slots/bags should only
--- show once) and resolves a name even if C_Container's own itemName field
--- is empty (item data not yet cached client-side - falls back to
--- C_Item.GetItemInfo, then a placeholder rather than erroring).
+-- ---- item variants ----
+--
+-- Gear that is the same base item but at different item levels (a heroic
+-- helm at ilvl 308 vs 311) trades at very different prices, so for the
+-- patch-specific list gear is told apart by ilvl. Nothing else about the item
+-- (secondary stats, sockets, ...) matters here - only the item level.
+-- Non-gear (materials, consumables, ...) has no variants and stays keyed by
+-- item id alone.
+
+-- Plain-text split (no patterns), keeping empty fields: item links are full
+-- of them ("item:271441::::::::80:...").
+local function SplitOn(str, sep)
+	local parts = {}
+	local from = 1
+	while true do
+		local at = string.find(str, sep, from, true)
+		if not at then
+			table.insert(parts, string.sub(str, from))
+			return parts
+		end
+		table.insert(parts, string.sub(str, from, at - 1))
+		from = at + 1
+	end
+end
+
+-- The bonus ids embedded in an item link. Fields after "item:" are
+-- itemID:enchant:gem1..gem4:suffix:unique:linkLevel:spec:modifiersMask:
+-- context:numBonusIDs:bonusID1... so the count is field 13 and the ids follow.
+-- Not used to tell variants apart (ilvl is) - exported so the mapping from
+-- bonus ids to ilvl can be learned for the sync side.
+local function ParseBonusIds(link)
+	local itemString = link and string.match(link, "item:([^|]*)")
+	if not itemString then
+		return {}
+	end
+	local parts = SplitOn(itemString, ":")
+	local count = tonumber(parts[13]) or 0
+	local ids = {}
+	for i = 1, count do
+		local id = tonumber(parts[13 + i])
+		if id then
+			table.insert(ids, id)
+		end
+	end
+	return ids
+end
+
+-- Weapons (class 2) and armor (class 4) that go in an equipment slot. Armor
+-- with no equip slot is cosmetic/misc and has nothing to vary by.
+local function IsGear(itemId)
+	local _, _, _, equipLoc, _, classID = C_Item.GetItemInfoInstant(itemId)
+	return (classID == 2 or classID == 4) and equipLoc ~= nil and equipLoc ~= ""
+end
+
+-- The item level the player sees on the tooltip, upgrades included. nil when
+-- the client hasn't loaded the item yet (the caller then treats it as
+-- unknown rather than guessing).
+local function GetItemLevel(link)
+	local level = C_Item.GetDetailedItemLevelInfo and C_Item.GetDetailedItemLevelInfo(link)
+	if not level or level <= 0 then
+		level = select(4, C_Item.GetItemInfo(link))
+	end
+	if level and level > 0 then
+		return math.floor(level + 0.5)
+	end
+	return nil
+end
+
+-- Persistence key: the bare item id for a base entry, "id@ilvl" for one
+-- variant of a gear item.
+local function EntryKey(itemId, ilvl)
+	if ilvl then
+		return string.format("%d@%d", itemId, ilvl)
+	end
+	return itemId
+end
+
+-- Dedupes by item id - and, for gear, by item id + ilvl - so a stack split
+-- across multiple slots/bags shows once (with its total count) while a 308
+-- and a 311 helm show as two rows. Resolves a name even if C_Container's own
+-- itemName field is empty (item data not yet cached client-side - falls back
+-- to C_Item.GetItemInfo, then a placeholder rather than erroring).
 local function ScanBagContents()
 	local seen = {}
 	local items = {}
@@ -45,27 +123,41 @@ local function ScanBagContents()
 		local numSlots = C_Container.GetContainerNumSlots(bagID)
 		for slot = 1, numSlots do
 			local info = C_Container.GetContainerItemInfo(bagID, slot)
-			if info and info.itemID and not seen[info.itemID] then
-				seen[info.itemID] = true
-				local name = info.itemName
-				if not name or name == "" then
-					name = C_Item.GetItemInfo(info.itemID)
+			if info and info.itemID then
+				local link = info.hyperlink
+				local ilvl = link and IsGear(info.itemID) and GetItemLevel(link) or nil
+				local key = EntryKey(info.itemID, ilvl)
+				if seen[key] then
+					seen[key].count = seen[key].count + (info.stackCount or 1)
+				else
+					local name = info.itemName
+					if not name or name == "" then
+						name = C_Item.GetItemInfo(info.itemID)
+					end
+					-- bagID/slot kept (not just itemID) so the row can show the
+					-- exact real tooltip via GameTooltip:SetBagItem - durability,
+					-- enchants, etc. - not just a generic base-item tooltip.
+					local item = {
+						id = info.itemID,
+						name = name or ("Item " .. info.itemID),
+						icon = info.iconFileID,
+						bagID = bagID,
+						slot = slot,
+						ilvl = ilvl,
+						bonus = table.concat(ParseBonusIds(link), ","),
+						count = info.stackCount or 1,
+					}
+					seen[key] = item
+					table.insert(items, item)
 				end
-				-- bagID/slot kept (not just itemID) so the row can show the
-				-- exact real tooltip via GameTooltip:SetBagItem - durability,
-				-- enchants, etc. - not just a generic base-item tooltip.
-				table.insert(items, {
-					id = info.itemID,
-					name = name or ("Item " .. info.itemID),
-					icon = info.iconFileID,
-					bagID = bagID,
-					slot = slot,
-				})
 			end
 		end
 	end
 	table.sort(items, function(a, b)
-		return a.name < b.name
+		if a.name ~= b.name then
+			return a.name < b.name
+		end
+		return (a.ilvl or 0) < (b.ilvl or 0)
 	end)
 	return items
 end
@@ -99,27 +191,48 @@ local function SeedFromTrackedData()
 	end
 end
 
-local function IsTracked(itemId)
-	return WowAHTrackerCategorizerDB.permanent[itemId] ~= nil or WowAHTrackerCategorizerDB.patchSpecific[itemId] ~= nil
+-- Which list, if any, already covers this bag item. Permanent entries and
+-- patch-specific base entries (no ilvl) cover every variant of the item id;
+-- a patch-specific variant entry covers just its own ilvl.
+local function TrackedIn(item)
+	local db = WowAHTrackerCategorizerDB
+	if db.permanent[item.id] then
+		return "permanent"
+	end
+	if db.patchSpecific[item.id] or (item.ilvl and db.patchSpecific[EntryKey(item.id, item.ilvl)]) then
+		return "patch-specific"
+	end
+	return nil
 end
 
-local function AddToCategory(itemId, itemName, category)
-	if IsTracked(itemId) then
+local function IsTracked(item)
+	return TrackedIn(item) ~= nil
+end
+
+-- Permanent items are always tracked by base id. Patch-specific gear is
+-- tracked per ilvl (a variant entry); anything without an ilvl is a plain
+-- base entry.
+local function AddToCategory(item, itemName, category)
+	if IsTracked(item) then
 		return
 	end
-	local entry = { id = itemId, name = itemName }
 	if category == "patch-specific" then
-		WowAHTrackerCategorizerDB.patchSpecific[itemId] = entry
+		WowAHTrackerCategorizerDB.patchSpecific[EntryKey(item.id, item.ilvl)] = {
+			id = item.id,
+			name = itemName,
+			ilvl = item.ilvl,
+			bonus = item.ilvl and item.bonus or nil,
+		}
 	else
-		WowAHTrackerCategorizerDB.permanent[itemId] = entry
+		WowAHTrackerCategorizerDB.permanent[item.id] = { id = item.id, name = itemName }
 	end
 end
 
-local function RemoveFromCategory(itemId, category)
+local function RemoveFromCategory(entry, category)
 	if category == "patch-specific" then
-		WowAHTrackerCategorizerDB.patchSpecific[itemId] = nil
+		WowAHTrackerCategorizerDB.patchSpecific[EntryKey(entry.id, entry.ilvl)] = nil
 	else
-		WowAHTrackerCategorizerDB.permanent[itemId] = nil
+		WowAHTrackerCategorizerDB.permanent[entry.id] = nil
 	end
 end
 
@@ -129,9 +242,25 @@ local function SortedEntries(dbTable)
 		table.insert(list, entry)
 	end
 	table.sort(list, function(a, b)
-		return a.name < b.name
+		if a.name ~= b.name then
+			return a.name < b.name
+		end
+		return (a.ilvl or 0) < (b.ilvl or 0)
 	end)
 	return list
+end
+
+-- "[311] " for a variant; "[any ilvl] " for a base entry of a gear item
+-- (tracked before variants existed - it lumps every ilvl together, which is
+-- what the player can now remove and re-add per ilvl); "" for non-gear.
+local function IlvlLabel(entry)
+	if entry.ilvl then
+		return string.format("[%d] ", entry.ilvl)
+	end
+	if IsGear(entry.id) then
+		return "[any ilvl] "
+	end
+	return ""
 end
 
 -- ---- UI ----
@@ -235,11 +364,11 @@ end
 local function RebuildBagColumn(bagItems)
 	local shown = 0
 	for _, item in ipairs(bagItems) do
-		if not IsTracked(item.id) then
+		if not IsTracked(item) then
 			shown = shown + 1
 			local row = GetOrCreateBagRow(shown)
 			PositionRow(row, shown)
-			row.text:SetText(string.format("%s (%d)", item.name, item.id))
+			row.text:SetText(string.format("%s%s (%d)", IlvlLabel(item), item.name, item.id))
 			row.icon:SetTexture(item.icon)
 			row:SetScript("OnEnter", function(self)
 				GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
@@ -256,11 +385,14 @@ local function RebuildBagColumn(bagItems)
 				-- the generic base name here, via the bare item id rather
 				-- than this specific bag instance's suffixed name.
 				local baseName = C_Item.GetItemInfo(item.id)
-				AddToCategory(item.id, baseName or item.name, "permanent")
+				AddToCategory(item, baseName or item.name, "permanent")
 				RefreshAll()
 			end)
 			row.addPatch:SetScript("OnClick", function()
-				AddToCategory(item.id, item.name, "patch-specific")
+				-- Gear is added as this specific ilvl (item.ilvl); anything
+				-- else as a plain base entry.
+				local baseName = C_Item.GetItemInfo(item.id)
+				AddToCategory(item, baseName or item.name, "patch-specific")
 				RefreshAll()
 			end)
 			row:Show()
@@ -278,7 +410,8 @@ local function RebuildTrackedColumn(pool, parent, dbTable, category)
 	for i, entry in ipairs(entries) do
 		local row = pool[i] or GetOrCreateTrackedRow(pool, parent, category)
 		PositionRow(row, i)
-		row.text:SetText(string.format("%s (%d)", entry.name, entry.id))
+		local label = category == "patch-specific" and IlvlLabel(entry) or ""
+		row.text:SetText(string.format("%s%s (%d)", label, entry.name, entry.id))
 		if row.patchBox then
 			row.patchBox:SetText(entry.patch or "")
 			row.patchBox:SetScript("OnEditFocusLost", function(self)
@@ -290,7 +423,7 @@ local function RebuildTrackedColumn(pool, parent, dbTable, category)
 			end)
 		end
 		row.remove:SetScript("OnClick", function()
-			RemoveFromCategory(entry.id, category)
+			RemoveFromCategory(entry, category)
 			RefreshAll()
 		end)
 		row:Show()
@@ -320,11 +453,38 @@ local function BuildExportText()
 	local patch = SortedEntries(WowAHTrackerCategorizerDB.patchSpecific)
 	table.insert(lines, string.format("# Patch-specific (%d)", #patch))
 	for _, entry in ipairs(patch) do
-		if entry.patch then
-			table.insert(lines, string.format("%d | %s | patch=%s", entry.id, entry.name, entry.patch))
-		else
-			table.insert(lines, string.format("%d | %s", entry.id, entry.name))
+		local line = string.format("%d | %s", entry.id, entry.name)
+		if entry.ilvl then
+			line = line .. string.format(" | ilvl=%d", entry.ilvl)
+			if entry.bonus and entry.bonus ~= "" then
+				line = line .. " | bonus=" .. entry.bonus
+			end
 		end
+		if entry.patch then
+			line = line .. " | patch=" .. entry.patch
+		end
+		table.insert(lines, line)
+	end
+
+	-- Everything in the bags right now, whether or not it is staged above, so
+	-- it can be compared against config/trackedItems.json (the list the sync
+	-- actually uses) rather than only against this addon's own staging.
+	local bags = ScanBagContents()
+	table.insert(lines, string.format("# Bags (%d)", #bags))
+	for _, item in ipairs(bags) do
+		local line = string.format("%d | %s", item.id, item.name)
+		if item.ilvl then
+			line = line .. string.format(" | ilvl=%d", item.ilvl)
+			if item.bonus ~= "" then
+				line = line .. " | bonus=" .. item.bonus
+			end
+		end
+		line = line .. string.format(" | x%d", item.count)
+		local staged = TrackedIn(item)
+		if staged then
+			line = line .. " | staged=" .. staged
+		end
+		table.insert(lines, line)
 	end
 
 	return table.concat(lines, "\n")
