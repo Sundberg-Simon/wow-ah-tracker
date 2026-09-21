@@ -879,7 +879,10 @@ eftersom.]
       Kyparite och crafta alla fyra gem-typer, eller köp gemsen direkt), och
       modellen räknade dessutom inte in att ett överhoppat steg lämnar en gem
       man ändå behöver ATT KÖPA — rekommendationen kunde se lönsam ut utan att
-      vara det. Föreslå inte per-steg-/per-gem-val igen; jämför hela vägar
+      vara det. (Simons förtydligande: transmutes GÅR att välja per gem, men de
+      gröna gemsen kan han inte sälja — för liten marknad — och de blå behövs
+      för att göra alla fyra pantermounts. Alla fyra slutgems behövs alltså, så
+      det verkliga valet är hel väg mot att köpa slutresultatet.) Föreslå inte per-steg-/per-gem-val igen; jämför hela vägar
       (kostnad att göra X mot att köpa X). Helkedjan antar därför fortsatt att
       alla hållna input-gems transmuteras, och det är rätt frågeställning.
     - **Prishistorik och trend (2026-09-21, byggt)**: ett pris ensamt säger
