@@ -254,7 +254,106 @@ export function evaluateChain(args: {
   return { plan, ...totals, contributions, breakEvenRootInputPrice: breakEven, warnings };
 }
 
+// ---- the best plan: only the steps that pay ----
+
+/** More further steps than this and every combination is no longer tried (2^12 = 4 096 plans is instant; 2^30 is not). */
+export const MAX_OPTIMIZED_STEPS = 12;
+
+export interface ChainOptimum {
+  /** The best set of further steps, in the order they run. */
+  kept: ResolvedOperation[];
+  /** Further steps the best plan leaves out, with how much worse it would be if that step were forced back in. */
+  dropped: { operationId: number; name: string; costOfIncluding: number }[];
+  /** The whole chain, every step, as evaluated by evaluateChain. */
+  fullSaving: number | null;
+  /** The best plan's own evaluation (cost, value, saving, contributions), sized like the full chain. */
+  evaluation: ChainEvaluation;
+  /** bestSaving - fullSaving; 0 when every step pulls its weight. */
+  gain: number;
+  /**
+   * Some value in either plan is a lower bound (the market can't supply that many gems at a believable price). Such a
+   * value is understated, which leans the comparison against steps whose output can't be bought in volume.
+   */
+  usesLowerBounds: boolean;
+}
+
+/**
+ * Which of the further steps are worth running? The whole chain assumes every
+ * step is performed on everything you hold, so a step that costs more than the
+ * gem it uses up is dragged along. Every combination of the steps that have
+ * data is planned and valued exactly (steps feed each other - a step that loses
+ * on its own can still be worth it for the one after it - so leaving out one
+ * step at a time would not find the best plan), and the one with the largest
+ * saving wins; on a tie the plan with fewer crafts.
+ *
+ * Returns null when it cannot be decided honestly: the whole chain's saving is
+ * unknown (a missing price or policy - unknown is not zero, so a subset that
+ * merely avoids the missing piece must not "win"), or there are too many steps.
+ */
+export function optimizeChain(args: {
+  root: ResolvedOperation;
+  rootExecutions: number;
+  others: readonly ResolvedOperation[];
+  books: ReadonlyMap<number, PriceBook>;
+  policies: ReadonlyMap<number, Policy>;
+  nameOf: (itemId: number) => string;
+}): ChainOptimum | null {
+  const { root, rootExecutions, others, books, policies, nameOf } = args;
+  // Only steps that can run at all are choices: one that runs in the full plan, or on its own after the root. (A step with
+  // nothing to work on, like a smelt of something you don't hold, is neither kept nor dropped - it is just not part of this.)
+  const withData = others.filter((o) => o.outputs.length > 0);
+  const ranInFull = new Set(planChain({ root, rootExecutions, others: withData }).steps.slice(1).map((s) => s.operation.operationId));
+  const candidates = withData.filter((o) => ranInFull.has(o.operationId) || planChain({ root, rootExecutions, others: [o] }).steps.length > 1);
+  if (candidates.length > MAX_OPTIMIZED_STEPS) return null;
+
+  const savingWith = (leftOut: ReadonlySet<number>): { saving: number | null; crafts: number; lowerBound: boolean } => {
+    const plan = planChain({ root, rootExecutions, others: candidates, skip: leftOut });
+    const totals = valuePlan(plan, books, policies, nameOf);
+    return { saving: totals.saving, crafts: plan.steps.length - 1, lowerBound: totals.valueLines.some((l) => l.lowerBound) };
+  };
+  const full = savingWith(new Set());
+  if (full.saving === null) return null;
+
+  let best = { mask: (1 << candidates.length) - 1, saving: full.saving, crafts: full.crafts };
+  for (let mask = 0; mask < 1 << candidates.length; mask++) {
+    const leftOut = new Set(candidates.filter((_, i) => (mask & (1 << i)) === 0).map((o) => o.operationId));
+    const r = savingWith(leftOut);
+    if (r.saving === null) continue;
+    if (r.saving > best.saving || (r.saving === best.saving && r.crafts < best.crafts)) best = { mask, saving: r.saving, crafts: r.crafts };
+  }
+
+  const kept = candidates.filter((_, i) => (best.mask & (1 << i)) !== 0);
+  const evaluation = evaluateChain({ root, rootExecutions, others: kept, books, policies, nameOf });
+  const dropped = candidates
+    .filter((_, i) => (best.mask & (1 << i)) === 0)
+    .map((op) => {
+      const withIt = savingWith(new Set(candidates.filter((c) => !kept.includes(c) && c !== op).map((c) => c.operationId)));
+      return { operationId: op.operationId, name: op.name, costOfIncluding: withIt.saving === null ? 0 : best.saving - withIt.saving };
+    });
+  return {
+    kept,
+    dropped,
+    fullSaving: full.saving,
+    evaluation,
+    gain: best.saving - full.saving,
+    usesLowerBounds: full.lowerBound || evaluation.valueLines.some((l) => l.lowerBound),
+  };
+}
+
 // ---- text ----
+
+/** Plain-text rendering of the best plan (used by the CLI). */
+export function formatOptimum(o: ChainOptimum | null): string[] {
+  if (o === null) return ["Best plan: not decided (a price or a policy is missing, so the saving is unknown)."];
+  if (o.dropped.length === 0) return ["Best plan: every step pays for itself - running them all is the best plan."];
+  const lines = [`Best plan: skip ${o.dropped.map((d) => d.name).join(", ")}.`];
+  const s = o.evaluation.saving as number;
+  lines.push(`  Saving ${formatGold(s)} instead of ${formatGold(o.fullSaving as number)} - ${formatGold(o.gain)} better than running every step.`);
+  lines.push(`  Run: ${o.kept.map((k) => k.name).join(", ") || "(no further steps)"}.`);
+  for (const d of o.dropped) lines.push(`  ${d.name}: forcing it back in would cost you ${formatGold(d.costOfIncluding)}.`);
+  if (o.usesLowerBounds) lines.push("  Caution: some values above are lower bounds (the market can't supply that many at a believable price), which leans against steps whose output can't be bought in volume.");
+  return lines;
+}
 
 /** Plain-text rendering of a chain evaluation (used by the CLI). */
 export function formatChain(e: ChainEvaluation, nameOf: (itemId: number) => string): string {

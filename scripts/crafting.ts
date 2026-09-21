@@ -13,8 +13,9 @@ import {
 import { craftingDbPath, openCraftingDb } from "../src/crafting/db.js";
 import { fetchItemName, searchItemsByName, type StaticGet } from "../src/crafting/itemLookup.js";
 import { fetchCommodityDump } from "../src/crafting/blizzardMarket.js";
-import { evaluateChain, formatChain } from "../src/crafting/chain.js";
+import { evaluateChain, formatChain, formatOptimum, optimizeChain } from "../src/crafting/chain.js";
 import { getCheapestCost } from "../src/crafting/cheapest.js";
+import { formatTrend, snapshotPrices, trendFor, watchedItemIds, TREND_WINDOW_DAYS } from "../src/crafting/history.js";
 import { fractionToNumber } from "../src/crafting/fraction.js";
 import { formatGold } from "../src/crafting/money.js";
 import { formatProcure, procure } from "../src/crafting/procure.js";
@@ -80,6 +81,11 @@ const USAGE = `WoW Crafting Optimizer - local data CLI (data-private/crafting.sq
                                                          --executions sizes prospecting-type routes (default 600), shown for information
   npm run crafting -- chain [--ore N] [--root <op>]      buy N of the root operation's input (default 3000), run it, then
                                                          every other operation on what you hold: what does it cost vs buying the result?
+
+  npm run crafting -- prices snapshot                 fetch and record the current prices of every item the operations use or
+                                                         make (what the hourly scheduled task runs; see Snapshot-Prices.ps1)
+  npm run crafting -- prices trend [<item>]           is the price cheap, typical or dear next to the last 7 days? (default: every
+                                                         watched item; needs ~a day of hourly snapshots before it says more than "collecting")
 
   npm run crafting -- backup create                   snapshot + verify (also runs automatically after every change)
   npm run crafting -- backup list
@@ -399,8 +405,10 @@ async function main(): Promise<void> {
       console.log(`Prices: ${prices.source}${prices.observedNewest ? ` (Blizzard dump ${prices.observedNewest})` : ""}. Buying ${inputUnits.toLocaleString("en-US")} x ${nameOf(root.inputs[0].itemId)} = ${inputUnits / perExecution} executions of ${root.name}.`);
       if (prices.error) console.warn(`  ${prices.error}`);
       console.log("");
-      const evaluation = evaluateChain({ root, rootExecutions: inputUnits / perExecution, others, books: prices.books, policies: getPolicies(db), nameOf });
-      console.log(formatChain(evaluation, nameOf));
+      const chainArgs = { root, rootExecutions: inputUnits / perExecution, others, books: prices.books, policies: getPolicies(db), nameOf };
+      console.log(formatChain(evaluateChain(chainArgs), nameOf));
+      console.log("");
+      console.log(formatOptimum(optimizeChain(chainArgs)).join("\n"));
     } else if (group === "worth") {
       const target = resolveItem(db, [action, ...rest].filter(Boolean).join(" "));
       const wantedUnits = values.units ? parseCount("--units", values.units) : 100;
@@ -444,6 +452,21 @@ async function main(): Promise<void> {
           console.log(`  ${r.strategy} via ${r.via}: ${own}, against ${buy} to buy the same ${fractionToNumber(r.units).toLocaleString("en-US", { maximumFractionDigits: 1 })} units`);
         }
       }
+    } else if (group === "prices" && action === "snapshot") {
+      const r = await snapshotPrices(db, fetchCommodityDump);
+      if (r.source !== "live") {
+        console.error(`Price snapshot FAILED: ${r.error ?? "no prices were fetched"}`);
+        process.exitCode = 1;
+      } else {
+        console.log(`Recorded ${r.items} watched item(s) from the Blizzard dump of ${r.observedAt}. History: ${r.historyRows} row(s); full ladders pruned: ${r.laddersPruned}.`);
+        if (r.error) console.warn(`  ${r.error}`);
+      }
+    } else if (group === "prices" && action === "trend") {
+      const now = new Date();
+      const ids = rest.length > 0 ? [resolveItem(db, rest.join(" "))] : [...watchedItemIds(db)].sort((a, b) => a - b);
+      const name = (id: number) => getItemName(db, id) ?? String(id);
+      for (const id of ids) console.log(formatTrend(name(id), trendFor(db, id, now), formatGold));
+      console.log(`(going price = where the first ~5 units are reached; window ${TREND_WINDOW_DAYS} days)`);
     } else if (group === "backup" && action === "create") {
       printBackup(createBackup(db, backupConfig()));
     } else {

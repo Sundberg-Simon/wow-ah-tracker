@@ -638,9 +638,10 @@ eftersom.]
         från ungefär noll till tusentals guld. En ögonblicksbild räcker
         alltså inte som beslutsunderlag — och breakeven-priset på ore
         (visas i fliken) är det stabilare måttet.
-      * **Öppet / ej byggt**: trend/prishistorik i fliken, känslighet ("vinst
-        utan största posten"), en mer konservativ försäljningsmodell,
-        icke-commodity-items per realm, fler operationer i samma flöde.
+      * **Öppet / ej byggt**: känslighet ("vinst utan största posten"), en
+        mer konservativ försäljningsmodell, icke-commodity-items per realm,
+        fler operationer i samma flöde. (Prishistorik/trend byggd 2026-09-21,
+        se "Prishistorik och trend" nedan.)
     - **Perspektiv: Simon är CRAFTARE (bekräftat 2026-09-20) — nästa modellsteg
       är BUY vs PROSPECT per gem han behöver, inte "vinst på att sälja"**.
       Han köper i större utsträckning än han säljer på den här typen av items,
@@ -831,9 +832,9 @@ eftersom.]
         är ett SHORTFALL ("marknaden kan inte leverera så många till rimligt
         pris") → värdet blir en flaggad NEDRE GRÄNS, inköpet blir okänt,
         `procure` ser köp som ej genomförbart. Gäller överallt (chain,
-        procure, sourcing, tunn-marknad-flaggan). Kedjan antar dessutom att
-        ALLA hållna input-gems transmuteras; en "bara de lönsamma stegen"-plan
-        (hoppa över steg med negativt bidrag) är enkel att lägga till.
+        procure, sourcing, tunn-marknad-flaggan). Hela kedjan antar att ALLA
+        hållna input-gems transmuteras; "bara de lönsamma stegen" finns sedan
+        2026-09-21 som ett separat bästa-plan-svar (se nedan).
     - **"Är det värt att crafta?" — verdiktet, uppifrån och ner (2026-09-21,
       byggt)**: Simons fråga är beslutsvänd: FÖRST "är Living Steel värt att
       crafta?", och BARA om ja: "är Trillium Bar värt att crafta, och hur?" —
@@ -864,6 +865,67 @@ eftersom.]
         billigare, medan Living Steel förblev "köp" (~11 % dyrare att crafta,
         drivet av Spirit of Harmony ~60 % av kostnaden). Tolka det som ett
         läge, inte en dom; break-even-priserna i verdiktet är det stabila.
+    - **Bästa plan: bara de lönsamma stegen (2026-09-21, byggt)**:
+      helkedjan kör varje transmute på ALLA hållna gems, så ett steg som
+      kostar mer än gemet det gör slut på dras med. `optimizeChain`
+      (`chain.ts`) planerar och värderar VARJE kombination av stegen (bara
+      steg som kan köra alls; 2^n, tak `MAX_OPTIMIZED_STEPS` = 12 — över det
+      returneras null) och väljer störst besparing, vid lika färre crafts.
+      * **Varför inte ett-steg-i-taget**: steg matar varandra (ett steg som
+        förlorar ensamt kan vara värt det för nästa) och konkurrerar om samma
+        gem (körs i ordning, så det första tar allt). Bara uttömmande sökning
+        hittar rätt kombination; tester täcker båda fallen.
+      * **Ärlighet**: är helkedjans besparing OKÄND (saknad policy/pris) avgör
+        den INTE (null) — annars kunde ett delmängds-val som råkar undvika det
+        saknade "vinna". Innehåller något värde en NEDRE GRÄNS (marknaden kan
+        inte leverera så många till rimligt pris) sätts `usesLowerBounds` och
+        CLI/flik varnar: en undervärderad output lutar jämförelsen mot steg
+        vars output inte går att köpa i volym. Ta en knapp gräns med försiktighet.
+      * **Yta**: CLI `chain` skriver "Best plan: skip …" under helkedjan
+        (vad man kör, vad man hoppar, vad det kostar att tvinga tillbaka ett
+        steg); fliken har "Only the profitable steps" under stegtabellen;
+        konsolsammanfattningen i `report:earnings` får en rad. Helkedjan och
+        flödesgrafen visar fortfarande hela planen.
+      * **Första riktiga körningen 2026-09-21**: hoppa över Sun's Radiance och
+        Primordial Ruby ⇒ ~5 479 g mot ~3 274 g för helkedjan — men båda
+        stegens output var nedre gräns (varningen visades), så det är en
+        indikation, inte en dom.
+    - **Prishistorik och trend (2026-09-21, byggt)**: ett pris ensamt säger
+      lite (Kyparite föll ~40 % på en timme); det som avgör NÄR man köper är
+      var dagens pris ligger bland veckans.
+      * **Lagring** (schema v6, `history.ts`): `market_history` = en liten rad
+        per item per Blizzard-dump (going price, lägsta pris, listad mängd),
+        sparas för alltid; skrivs av `saveBooks` så varje prishämtning (rapport,
+        CLI, timjobb) bidrar. De fulla säljlistorna (`market_snapshots`) är
+        skrymmande och behövs bara i senaste versionen, så de tunnas ut efter
+        `SNAPSHOT_KEEP_DAYS` = 7 dagar (nyaste per item behålls alltid;
+        historikraden görs FÖRE radering via `backfillHistory`). Det är
+        marknadsobservationer, inte Simons egna poster — samma resonemang som
+        #4 för `price_snapshots`; batcher/körningar raderas aldrig.
+      * **Måttet**: GOING price (`goingPrice` i `market.ts`: priset där de
+        första ~5 enheterna nås; samma som prisgränsens grund) — inte lägsta
+        listning, så en enda lågbollad post inte ser ut som en krasch.
+      * **Trenden** (`computeTrend`, ren): fönster 7 dagar; kräver ≥ 8
+        observationer över ≥ 24 h, annars "collecting" (aldrig gissat). Position
+        = andel av veckans observationer som var billigare än nu (lika räknas
+        halvt): ≤ 20:e percentilen = cheap, ≥ 80:e = dear, annars typical.
+        Även förändring mot ~24 h sedan och veckans lägsta/median/högsta.
+        Det säger om läget är bra relativt veckan, inte att priset vänder.
+      * **Insamling**: `npm run crafting -- prices snapshot` hämtar priset på
+        alla bevakade items (`watchedItemIds`: allt operationerna använder/gör
+        + `need`-items, samma mängd som rapporten prissätter). Schemalagd
+        uppgift `WowAhTrackerPriceSnapshot` (varje timme, som Simon, dold,
+        `StartWhenAvailable`) kör `scripts/windows/Snapshot-Prices.ps1`,
+        loggar till `Snapshot-Prices.log`; registreras med
+        `Register-PriceSnapshotTask.ps1` (UAC bara för registreringen).
+        Registrerad 2026-09-21. `busy_timeout` 10 s i `openCraftingDb` så att
+        timjobbet, rapporten och CLI-kommandon inte kraschar mot varandra.
+      * **Yta**: `prices trend [<item>]` i CLI; fliken har "Is the price low or
+        high right now?" (köpta items i kedjan först, sedan övriga `need`) med
+        badge, mot-igår, vecko-intervall och sparkline; säger uttryckligen när
+        historiken inte räcker. Första dygnet visar alla "collecting".
+      * **Backfill**: de befintliga snapshotsen (~19 h från 2026-09-20/21)
+        gav 168 historikrader direkt.
     - **Buy vs prospect / biprodukt-policy (2026-09-21, byggt)**: per item en
       policy i den LOKALA crafting-DB:n (`item_policy`, schema v4, `policy.ts`;
       CLI `policy set|list|clear`): **need** = används i egna crafts, värd =

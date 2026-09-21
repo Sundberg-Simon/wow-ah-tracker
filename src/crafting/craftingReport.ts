@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
-import { evaluateChain, type ChainEvaluation } from "./chain.js";
+import { evaluateChain, optimizeChain, type ChainEvaluation, type ChainOptimum } from "./chain.js";
+import { backfillHistory, trendFor, watchedItemIds, type Trend } from "./history.js";
 import { buildFlowGraph, type FlowGraph } from "./flow.js";
 import { getItemName } from "./items.js";
 import type { CommodityDumpFetcher } from "./market.js";
@@ -34,6 +35,10 @@ export interface CraftingTabModel {
   policies: Map<number, Policy>;
   /** The whole chain (buy the root's inputs, run it, then the other operations on what you hold); null without a root or a further step. */
   chain: ChainEvaluation | null;
+  /** Which of the chain's further steps are worth running (null: no chain, or it can't be decided - see optimizeChain). */
+  bestChain: ChainOptimum | null;
+  /** Where today's price sits among the last week's, for what the chain buys and what you need (see history.ts). */
+  trends: { itemId: number; role: "buy" | "need"; trend: Trend }[];
   /** The operations shown in the summary, flow and per-item table: the chain's, or every operation with known outputs when there is no chain. */
   shownOperationIds: Set<number>;
   /** For each needed item the shown operations don't make: how to end up with `units` of it, sourcing every input the cheapest way. */
@@ -61,14 +66,9 @@ export async function buildCraftingModel(args: {
   const executions = args.executions ?? DEFAULT_EXECUTIONS;
 
   const operations = listOperations(db).map((o) => resolveOperation(db, o.operationId));
-  const itemIds = new Set<number>();
-  for (const op of operations) {
-    for (const i of op.inputs) itemIds.add(i.itemId);
-    for (const o of op.outputs) itemIds.add(o.itemId);
-  }
-  // Items the player needs are priced too, even if no operation with known outputs mentions them yet
-  // (e.g. an end product whose only recipe is still waiting for logged runs).
-  for (const [id, policy] of getPolicies(db)) if (policy === "need") itemIds.add(id);
+  // Everything the operations use or make, plus the items the player needs even if no operation with known outputs
+  // mentions them yet (e.g. an end product whose only recipe is still waiting for logged runs).
+  const itemIds = watchedItemIds(db, operations);
 
   const prices = await loadPrices(db, fetchDump, itemIds, now);
   const policies = getPolicies(db, itemIds);
@@ -85,6 +85,20 @@ export async function buildCraftingModel(args: {
     chainRoot && chainOthers.length > 0
       ? evaluateChain({ root: chainRoot, rootExecutions: executions, others: chainOthers, books: prices.books, policies, nameOf })
       : null;
+
+  const bestChain =
+    chainRoot && chainOthers.length > 0
+      ? optimizeChain({ root: chainRoot, rootExecutions: executions, others: chainOthers, books: prices.books, policies, nameOf })
+      : null;
+
+  // Price trends: the items the chain buys (when is a good time to buy?), then the other items you need.
+  backfillHistory(db);
+  const bought = chain ? [...chain.plan.purchases.keys()] : [];
+  const needed = [...policies].filter(([id, policy]) => policy === "need" && !bought.includes(id)).map(([id]) => id);
+  const trends = [
+    ...bought.map((itemId) => ({ itemId, role: "buy" as const, trend: trendFor(db, itemId, now) })),
+    ...needed.map((itemId) => ({ itemId, role: "need" as const, trend: trendFor(db, itemId, now) })),
+  ];
 
   // Size each operation realistically: the root for `executions`, every further step for what the chain gives it
   // to work on (you do not transmute 600 gems you don't have - and pricing that many against a thin market only
@@ -148,6 +162,8 @@ export async function buildCraftingModel(args: {
     sourcing,
     policies,
     chain,
+    bestChain,
+    trends,
     shownOperationIds,
     procurements,
     itemNames,

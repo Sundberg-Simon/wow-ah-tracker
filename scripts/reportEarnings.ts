@@ -363,6 +363,9 @@ async function loadCraftingTab(): Promise<{ html: string; summary: string }> {
           : `${s.economics.operation.name}: ${gold(s.saving)} saved vs buying, over ${s.economics.executions} executions (${s.verdict})`,
       );
     if (model.chain?.saving != null) parts.unshift(`whole chain: ${gold(model.chain.saving)} saved vs buying`);
+    if (model.bestChain && model.bestChain.dropped.length > 0) {
+      parts.splice(1, 0, `best plan skips ${model.bestChain.dropped.map((d) => d.name).join(", ")}: ${gold(model.bestChain.evaluation.saving as number)} saved (${gold(model.bestChain.gain)} more)`);
+    }
     for (const p of model.procurements.filter((q) => q.onlyFor === null)) {
       const v = p.verdict;
       const name = model.itemNames.get(p.itemId) ?? p.itemId;

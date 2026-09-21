@@ -1,6 +1,7 @@
 import { fractionToNumber, type Fraction } from "./fraction.js";
 import { layerNodes, type FlowEdge, type FlowNode, type ItemNode, type OperationNode } from "./flow.js";
 import type { CraftingTabModel } from "./craftingReport.js";
+import { CHEAP_AT, DEAR_AT, MIN_SPAN_HOURS, MIN_TREND_SAMPLES, TREND_WINDOW_DAYS, type Trend } from "./history.js";
 import { formatGold } from "./money.js";
 import type { ResolvedOperation } from "./operations.js";
 import { unitCostOf, type ProcureNode } from "./procure.js";
@@ -50,6 +51,13 @@ export const CRAFTING_CSS = `
   ul.procure, ul.procure ul { list-style: none; padding-left: 1.2rem; margin: 0.2rem 0; }
   ul.procure li { margin: 0.35rem 0; }
   .chain-tables { display: flex; flex-wrap: wrap; gap: 1.5rem; }
+  .spark { vertical-align: middle; }
+  .spark polyline { fill: none; stroke: var(--accent); stroke-width: 1.5; }
+  .spark circle { fill: var(--accent); }
+  .badge.cheap { background: #16a34a33; color: #15803d; }
+  .badge.dear { background: #dc262633; color: #b91c1c; }
+  .badge.typical { background: #88888833; color: #666; }
+  .badge.collecting { background: #f59e0b33; color: #b45309; }
   .chain-tables > div { flex: 1 1 320px; }
 `;
 
@@ -350,7 +358,102 @@ function chainSection(model: CraftingTabModel): string {
     (stepRows === ""
       ? ""
       : `<h4>What each step adds compared with leaving it out</h4><table class="gems"><thead><tr><th>Step</th><th class="num">Crafts</th><th class="num">Adds</th></tr></thead><tbody>${stepRows}</tbody></table>` +
-        `<p class="muted">A negative number means that step costs you more than the gems it gives are worth: you would be better off keeping the gem it uses up.</p>`)
+        `<p class="muted">A negative number means that step costs you more than the gems it gives are worth: you would be better off keeping the gem it uses up.</p>`) +
+    bestPlanHtml(model)
+  );
+}
+
+/**
+ * The plan that runs only the steps that pay. Empty when it can't be decided
+ * (the chain's saving is unknown - the chain section above already says so).
+ */
+function bestPlanHtml(model: CraftingTabModel): string {
+  const best = model.bestChain;
+  if (!best) return "";
+  if (best.dropped.length === 0) {
+    return `<h4>Only the profitable steps</h4><p><span class="pos">Every step pays for itself</span> &mdash; running them all is the best plan.</p>`;
+  }
+  const rows = [
+    ...best.evaluation.contributions.map((c) => ({ id: c.operationId, name: c.name, run: true, effect: c.contribution })),
+    ...best.dropped.map((d) => ({ id: d.operationId, name: d.name, run: false, effect: -d.costOfIncluding })),
+  ]
+    .sort((a, b) => a.id - b.id)
+    .map(
+      (r) =>
+        `<tr class="${r.run ? "" : "muted"}"><td class="gem-name">${esc(r.name)}</td><td>${r.run ? `<span class="pos">Run</span>` : `<span class="neg">Skip</span>`}</td>` +
+        `<td class="num">${signedOrUnknown(r.effect)}</td></tr>`,
+    )
+    .join("");
+  return (
+    `<h4>Only the profitable steps</h4>` +
+    `<p>Skip <strong>${best.dropped.map((d) => esc(d.name)).join(", ")}</strong>. The best plan saves <strong>${goldOrUnknown(best.evaluation.saving)}</strong> ` +
+    `instead of ${goldOrUnknown(best.fullSaving)} &mdash; <strong>${goldOrUnknown(best.gain)}</strong> better than running every step. ` +
+    `You keep the gems a skipped step would have used up.</p>` +
+    `<table class="gems"><thead><tr><th>Step</th><th>In the best plan</th><th class="num">Effect on the saving</th></tr></thead><tbody>${rows}</tbody></table>` +
+    `<p class="muted">For a step you run, the effect is what it adds compared with leaving it out; for a skipped step it is what running it anyway would do to the saving. ` +
+    `Every combination of steps is tried, so a step that loses on its own stays when a later step makes it worth it.</p>` +
+    (best.usesLowerBounds
+      ? `<p class="warn">Some values are lower bounds (the market can't supply that many at a believable price), which leans against steps whose output can't be bought in volume &mdash; treat a close call with care.</p>`
+      : "")
+  );
+}
+
+/** A small line of the going price over the window, with a dot on the latest point. */
+function sparkline(t: Trend): string {
+  const pts = t.points;
+  if (pts.length < 2) return "";
+  const W = 120;
+  const H = 26;
+  const lo = Math.min(...pts.map((p) => p.going));
+  const hi = Math.max(...pts.map((p) => p.going));
+  const t0 = new Date(pts[0].observedAt).getTime();
+  const span = Math.max(1, new Date(pts[pts.length - 1].observedAt).getTime() - t0);
+  const x = (p: { observedAt: string }) => 2 + ((new Date(p.observedAt).getTime() - t0) / span) * (W - 4);
+  const y = (going: number) => (hi === lo ? H / 2 : H - 3 - ((going - lo) / (hi - lo)) * (H - 6));
+  const line = pts.map((p) => `${x(p).toFixed(1)},${y(p.going).toFixed(1)}`).join(" ");
+  const last = pts[pts.length - 1];
+  return `<svg class="spark" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="going price over the last ${TREND_WINDOW_DAYS} days"><polyline points="${line}"/><circle cx="${x(last).toFixed(1)}" cy="${y(last.going).toFixed(1)}" r="2.5"/></svg>`;
+}
+
+/**
+ * Is the price low or high right now? Where today's going price sits among the last week's, per item the chain buys
+ * and per item you need. Says plainly when there isn't enough history yet instead of guessing.
+ */
+function trendSection(model: CraftingTabModel, now: Date): string {
+  if (model.trends.length === 0) return "";
+  const name = (id: number) => esc(model.itemNames.get(id) ?? String(id));
+  const collecting = model.trends.filter((r) => r.trend.label === "collecting").length;
+  const noData = model.trends.filter((r) => r.trend.label === "no data").length;
+  const rows = model.trends
+    .map(({ itemId, role, trend: t }) => {
+      const label =
+        t.label === "no data"
+          ? `<span class="badge out" title="No price has been recorded for this item yet.">no data</span>`
+          : t.label === "collecting"
+            ? `<span class="badge collecting" title="${esc(`${t.points.length} observation(s) over ${t.spanHours.toFixed(1)}h. A verdict needs ${MIN_TREND_SAMPLES}+ observations over ${MIN_SPAN_HOURS}h+.`)}">collecting</span>`
+            : `<span class="badge ${t.label}" title="${esc(`${Math.round((t.percentile as number) * 100)}% of the last ${TREND_WINDOW_DAYS} days' observations were cheaper than now (ties count half).`)}">${t.label}</span>`;
+      const day =
+        t.changeDayPct === null ? `<span class="muted">&ndash;</span>` : `<span class="${t.changeDayPct > 0.05 ? "neg" : t.changeDayPct < -0.05 ? "pos" : ""}">${t.changeDayPct > 0 ? "+" : ""}${t.changeDayPct.toFixed(1)}%</span>`;
+      const range =
+        t.low === null ? `<span class="muted">&ndash;</span>` : `${formatGold(t.low)} &ndash; ${formatGold(t.median as number)} &ndash; ${formatGold(t.high as number)}`;
+      return (
+        `<tr><td class="gem-name">${name(itemId)} <span class="muted">${role === "buy" ? "buy" : "need"}</span></td>` +
+        `<td class="num">${t.latest ? formatGold(t.latest.going) : goldOrUnknown(null)}</td>` +
+        `<td>${label}</td><td class="num">${day}</td><td class="num">${range}</td><td>${sparkline(t)}</td>` +
+        `<td class="muted">${t.latest ? esc(ageText(t.latest.observedAt, now)) : ""}</td></tr>`
+      );
+    })
+    .join("");
+  const note =
+    collecting + noData > 0
+      ? `<p class="warn">${collecting + noData} of ${model.trends.length} item(s) don't have enough history for a verdict yet. Prices are recorded each time this report runs and by the hourly price task (<code>npm run crafting -- prices snapshot</code>); a verdict needs about a day of hourly data.</p>`
+      : "";
+  return (
+    `<h3>Is the price low or high right now?</h3>` +
+    note +
+    `<table class="gems"><thead><tr><th>Item</th><th class="num">Going price now</th><th>Against the last ${TREND_WINDOW_DAYS} days</th><th class="num">vs a day ago</th><th class="num">Week low &ndash; median &ndash; high</th><th>Trend</th><th>Latest dump</th></tr></thead><tbody>${rows}</tbody></table>` +
+    `<p class="muted">The going price is where the first ~5 units are reached, so a single low-ball listing doesn't move it. <strong>Cheap</strong> = at or below the ${Math.round(CHEAP_AT * 100)}th percentile of the week's observations, <strong>dear</strong> = at or above the ${Math.round(DEAR_AT * 100)}th; anything between is typical. ` +
+    `This says whether it is a good moment to buy relative to the week &mdash; not that the price will turn.</p>`
   );
 }
 
@@ -412,6 +515,7 @@ export function craftingTabHtml(model: CraftingTabModel, now: Date = model.gener
   <p class="muted">${sourceText} ${model.chain ? `The first operation is sized for ${units(model.executions)} executions; each further step for what that gives it to work on.` : `Sized for ${units(model.executions)} executions of each operation.`}</p>
   ${errorText}
   ${chainSection(model)}
+  ${trendSection(model, now)}
   ${summaryTable(model)}
   ${flow ?`<div class="flow">${flow}</div>` : ""}
   ${gemTable(model, nameOfItem)}
