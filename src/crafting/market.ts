@@ -93,17 +93,23 @@ export function minPrice(book: PriceBook | undefined): number | null {
 export const MAX_PRICE_MULTIPLE = 3;
 
 /**
- * The most a listing may cost to count: MAX_PRICE_MULTIPLE times the going price, taken as the price at which the
- * first few units are reached (not the single cheapest listing, so one low-ball outlier can't shrink the ceiling).
+ * The going price: the price at which the first few (5) units are reached, not the single cheapest listing, so one
+ * low-ball outlier neither shrinks the price ceiling nor makes a trend look like a crash. Null when nothing is listed.
  */
-export function priceCeiling(book: PriceBook | undefined): number | null {
+export function goingPrice(book: PriceBook | undefined): number | null {
   if (!book || book.levels.length === 0) return null;
   let cumulative = 0;
   for (const l of book.levels) {
     cumulative += l.quantity;
-    if (cumulative >= 5) return l.price * MAX_PRICE_MULTIPLE;
+    if (cumulative >= 5) return l.price;
   }
-  return book.levels[book.levels.length - 1].price * MAX_PRICE_MULTIPLE;
+  return book.levels[book.levels.length - 1].price;
+}
+
+/** The most a listing may cost to count: MAX_PRICE_MULTIPLE times the going price. */
+export function priceCeiling(book: PriceBook | undefined): number | null {
+  const going = goingPrice(book);
+  return going === null ? null : going * MAX_PRICE_MULTIPLE;
 }
 
 /** The listings that count: everything up to the price ceiling. */
@@ -176,14 +182,22 @@ export function walkBookFractional(book: PriceBook | undefined, units: Fraction)
 
 // ---- persistence (insert-only history, so a report can fall back to the last known prices) ----
 
-/** Store each book; a dump already stored for an item (same observedAt) is left alone. Returns rows inserted. */
+/**
+ * Store each book; a dump already stored for an item (same observedAt) is left alone. Also records the book's compact
+ * summary in market_history (see history.ts), which outlives the full ladders. Returns rows inserted.
+ */
 export function saveBooks(db: DatabaseSync, books: Iterable<PriceBook>): number {
   const insert = db.prepare(
     "INSERT OR IGNORE INTO market_snapshots (item_id, observed_at, levels_json) VALUES (?, ?, ?)",
   );
+  const insertHistory = db.prepare(
+    "INSERT OR IGNORE INTO market_history (item_id, observed_at, going_price, min_price, listed_quantity) VALUES (?, ?, ?, ?, ?)",
+  );
   let inserted = 0;
   for (const b of books) {
     inserted += Number(insert.run(b.itemId, b.observedAt, JSON.stringify(b.levels)).changes);
+    const going = goingPrice(b);
+    if (going !== null) insertHistory.run(b.itemId, b.observedAt, going, minPrice(b) as number, listedQuantity(b));
   }
   return inserted;
 }

@@ -143,6 +143,18 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (run_id, item_id)
   );
   `,
+  // v6: compact price history (see history.ts). One small row per item per Blizzard dump, kept for good; the full
+  // ask ladders in market_snapshots are only kept for a few days (they are bulky and only the latest is ever needed).
+  `
+  CREATE TABLE market_history (
+    item_id         INTEGER NOT NULL CHECK (item_id > 0),
+    observed_at     TEXT NOT NULL,   -- Blizzard's Last-Modified of the dump
+    going_price     INTEGER NOT NULL CHECK (going_price > 0),  -- copper; see market.ts goingPrice
+    min_price       INTEGER NOT NULL CHECK (min_price > 0),
+    listed_quantity INTEGER NOT NULL CHECK (listed_quantity >= 0),  -- units at a believable price
+    PRIMARY KEY (item_id, observed_at)
+  );
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
@@ -159,6 +171,8 @@ export function openCraftingDb(path: string = craftingDbPath()): DatabaseSync {
   // silently does nothing and removing a batch would orphan its outputs.
   try {
     db.exec("PRAGMA foreign_keys = ON");
+    // The hourly price task, the report and CLI commands can overlap; wait for a lock instead of failing at once.
+    db.exec("PRAGMA busy_timeout = 10000");
     migrate(db);
   } catch (err) {
     db.close(); // don't leak the file handle when refusing a newer/broken DB
