@@ -638,10 +638,17 @@ eftersom.]
         från ungefär noll till tusentals guld. En ögonblicksbild räcker
         alltså inte som beslutsunderlag — och breakeven-priset på ore
         (visas i fliken) är det stabilare måttet.
-      * **Öppet / ej byggt**: känslighet ("vinst utan största posten"), en
-        mer konservativ försäljningsmodell, icke-commodity-items per realm,
-        fler operationer i samma flöde. (Prishistorik/trend byggd 2026-09-21,
-        se "Prishistorik och trend" nedan.)
+      * **Öppet / ej byggt**: en mer konservativ försäljningsmodell,
+        icke-commodity-items per realm, fler operationer i samma flöde.
+        (Prishistorik/trend byggd 2026-09-21, se "Prishistorik och trend"
+        nedan.) **Uttryckligen AVFÄRDAT av Simon 2026-09-21 — föreslå inte
+        igen**: (a) känslighet "vinst utan största posten" per gem — gemsen
+        kommer som ett paket ur prospectingen och valet är allt-eller-inget
+        (köp Kyparite och crafta alla fyra gem-typer, eller köp gemsen direkt);
+        det går inte att välja bort ett enskilt gem, så "utan gem X" är inget
+        verkligt val; (b) `op import-recipe` från Blizzards API — Simon matar in
+        varje recept EN gång för hand, och målet är att se hans craftingkostnad
+        (Vial of the Sands m.fl.), inte att automatisera receptinmatning.
     - **Perspektiv: Simon är CRAFTARE (bekräftat 2026-09-20) — nästa modellsteg
       är BUY vs PROSPECT per gem han behöver, inte "vinst på att sälja"**.
       Han köper i större utsträckning än han säljer på den här typen av items,
