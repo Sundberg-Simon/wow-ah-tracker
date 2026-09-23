@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import { pool } from "../src/db/pool.js";
 import { EARNINGS_ACCOUNTS, accountLabel } from "../config/earningsAccounts.js";
 import { trackedItems } from "../config/trackedItems.js";
-import { computeStock, type StockReport } from "../src/earnings/stock.js";
+import { computeStock, type StockInputs, type StockReport } from "../src/earnings/stock.js";
 import { stockSectionHtml } from "../src/earnings/stockHtml.js";
 import { fetchCommodityDump } from "../src/crafting/blizzardMarket.js";
 import { buildCraftingModel } from "../src/crafting/craftingReport.js";
@@ -29,6 +29,7 @@ import { CRAFTING_CSS, craftingTabHtml } from "../src/crafting/flowHtml.js";
 import {
   computeEarnings,
   SPLITS,
+  type EarningsInputs,
   type EarningsReport,
   type ItemRow,
   type PopulationObservation,
@@ -350,11 +351,14 @@ function splitSectionHtml(
  * credentials, network down) becomes a message inside the tab, never a failed
  * earnings report - same rule as the stock parsing in the ingest.
  */
-async function loadCraftingTab(): Promise<{ html: string; summary: string }> {
+async function loadCraftingTab(
+  sales: EarningsInputs["sales"],
+  stockInputs: Pick<StockInputs, "observations" | "roster" | "connectedRealms" | "now">,
+): Promise<{ html: string; summary: string }> {
   let db: ReturnType<typeof openCraftingDb> | null = null;
   try {
     db = openCraftingDb();
-    const model = await buildCraftingModel({ db, fetchDump: fetchCommodityDump });
+    const model = await buildCraftingModel({ db, fetchDump: fetchCommodityDump, sales, stock: stockInputs });
     const parts = model.sourcing
       .filter((s) => model.shownOperationIds.has(s.economics.operation.operationId))
       .map((s) =>
@@ -610,7 +614,7 @@ async function main() {
   const outDir = path.join(__dirname, "../reports-private");
   mkdirSync(outDir, { recursive: true });
   const outPath = path.join(outDir, "earnings.html");
-  const crafting = await loadCraftingTab();
+  const crafting = await loadCraftingTab(inputs.sales, stockInputs);
   writeFileSync(outPath, buildHtml(report, freshness, stock, crafting.html), "utf8");
 
   const allTime = report.windows.find((w) => w.key === "all")!.splits;

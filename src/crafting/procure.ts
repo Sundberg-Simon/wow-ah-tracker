@@ -32,7 +32,7 @@ const strategyFor = (kind: OperationKind): ProcureStrategy => (kind === "prospec
 
 export interface ProcureOption {
   strategy: ProcureStrategy;
-  /** "auction house", or the operation's name. */
+  /** "auction house", "a vendor", or the operation's name. */
   via: string;
   /** Total copper to end up with the node's quantity this way; null = unknown. */
   cost: number | null;
@@ -70,13 +70,14 @@ interface Context {
 
 function buyOption(itemId: number, quantity: Fraction, ctx: Context): ProcureOption {
   const book = ctx.books.get(itemId);
+  const via = book?.observedAt === "vendor" ? "a vendor" : "auction house";
   if (listedQuantity(book) === 0) {
-    return { strategy: "BUY", via: "auction house", cost: null, executions: null, inputs: [], note: "nothing is listed" };
+    return { strategy: "BUY", via, cost: null, executions: null, inputs: [], note: "nothing is listed" };
   }
   const walk = walkBookFractional(book, quantity);
   return {
     strategy: "BUY",
-    via: "auction house",
+    via,
     cost: walk.complete ? walk.cost : null,
     executions: null,
     inputs: [],
@@ -158,7 +159,10 @@ export function formatProcure(result: ProcureResult, nameOf: (itemId: number) =>
       return;
     }
     const c = node.chosen;
-    const via = c.strategy === "BUY" ? "BUY on the auction house" : `${c.strategy} via ${c.via}${c.executions ? ` (${units(c.executions)} times)` : ""}`;
+    const via =
+      c.strategy === "BUY"
+        ? `BUY ${c.via === "a vendor" ? "from a vendor" : "on the auction house"}`
+        : `${c.strategy} via ${c.via}${c.executions ? ` (${units(c.executions)} times)` : ""}`;
     lines.push(`${head}: ${via} = ${money(node.cost)}${unit === null ? "" : ` (${formatGold(unit)} each)`}`);
     const others = node.options.filter((o) => o !== c);
     if (others.length > 0) {

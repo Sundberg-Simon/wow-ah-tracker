@@ -201,4 +201,12 @@ describe("formatProcure", () => {
     const text = formatProcure(procure({ itemId: STEEL, quantity: 12, operations, books: market() }), nameOf);
     assert.match(text, /not considered, no logged data yet.*Transmute T, Riddle/);
   });
+
+  it("labels a leaf priced from a vendor book distinctly from one priced on the AH", () => {
+    const { operations } = world();
+    const vendorBook: PriceBook = { itemId: SPIRIT, observedAt: "vendor", levels: [[1_000, 1_000_000]].map(([price, quantity]) => ({ price, quantity })) };
+    const text = formatProcure(procure({ itemId: STEEL, quantity: 12, operations, books: new Map([...market(), [SPIRIT, vendorBook]]) }), nameOf);
+    assert.match(text, /500 x G ore: BUY on the auction house = 5\.00g/);
+    assert.match(text, /30 x Spirit: BUY from a vendor = 3\.00g/);
+  });
 });

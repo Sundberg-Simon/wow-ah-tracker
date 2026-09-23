@@ -1,4 +1,5 @@
 import type { Fraction } from "./fraction.js";
+import { ValidationError } from "./validate.js";
 
 /*
  * Currency is always whole copper (a safe integer), never a float. The only
@@ -39,4 +40,19 @@ export function formatGold(copper: number): string {
   const silver = totalSilver % 100;
   const sign = copper < 0 && totalSilver > 0 ? "-" : "";
   return `${sign}${gold.toLocaleString("en-US")}.${String(silver).padStart(2, "0")}g`;
+}
+
+const MONEY_SPEC = /^(?:(\d+)g)?(?:(\d+)s)?(?:(\d+)c)?$/i;
+
+/**
+ * "2400g" / "20c" / "12g50s" -> whole copper. Input, the mirror of formatGold: hand-entered vendor
+ * prices are given in gold/silver/copper, never as a bare number (which unit would that even be?).
+ */
+export function parseMoney(spec: string): number {
+  const match = MONEY_SPEC.exec(spec.trim());
+  const [, g, s, c] = match ?? [];
+  if (!match || (!g && !s && !c)) {
+    throw new ValidationError(`"${spec}" is not a money amount - use g/s/c, e.g. "2400g" or "12g50s"`);
+  }
+  return Number(g ?? 0) * 10000 + Number(s ?? 0) * 100 + Number(c ?? 0);
 }

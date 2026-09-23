@@ -13,6 +13,7 @@ import { decide, pointlessInputs, type ItemVerdict } from "./verdict.js";
 import { loadPrices } from "./prices.js";
 import { computeEconomics, type OperationEconomics } from "./profit.js";
 import { analyzeSourcing, type SourcingAnalysis } from "./sourcing.js";
+import { buildSaleItemCards, type SaleItemCard, type SaleRecordForCards, type StockInputsForCards } from "./saleItemCards.js";
 
 /** 600 executions = 3 000 ore for a 5-ore prospect: the size of the player's real batches. */
 export const DEFAULT_EXECUTIONS = 600;
@@ -48,6 +49,8 @@ export interface CraftingTabModel {
   itemNames: Map<number, string>;
   /** Only the operations that know what they yield; the others are "waiting for data". */
   graph: FlowGraph;
+  /** One card per item marked with `sale mark` (see saleItems.ts): sales history plus current cost. */
+  saleItemCards: SaleItemCard[];
 }
 
 /**
@@ -61,6 +64,10 @@ export async function buildCraftingModel(args: {
   fetchDump: CommodityDumpFetcher;
   now?: Date;
   executions?: number;
+  /** Raw sale rows, for the sale-item cards; omit (or []) when the caller has none to offer. */
+  sales?: readonly SaleRecordForCards[];
+  /** Stock data, for the sale-item cards' cluster coverage; omit when the caller has none to offer. */
+  stock?: StockInputsForCards;
 }): Promise<CraftingTabModel> {
   const { db, fetchDump } = args;
   const now = args.now ?? new Date();
@@ -152,6 +159,8 @@ export async function buildCraftingModel(args: {
       }
     }
   }
+  const saleItemCards = buildSaleItemCards({ db, operations, books: prices.books, sales: args.sales ?? [], stock: args.stock });
+
   return {
     generatedAt: now,
     executions,
@@ -169,5 +178,6 @@ export async function buildCraftingModel(args: {
     procurements,
     itemNames,
     graph: buildFlowGraph(ready.map((i) => economics[i]), nameOf, ready.map((i) => sourcing[i])),
+    saleItemCards,
   };
 }

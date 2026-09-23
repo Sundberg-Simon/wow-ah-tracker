@@ -128,12 +128,18 @@ export function buildFlowGraph(
   return { nodes: [...nodes.values()], edges };
 }
 
+/** The minimum shape layerNodes needs - any node/edge graph can reuse the column layout, not just a FlowGraph. */
+export interface LayerableGraph {
+  nodes: { id: string }[];
+  edges: { from: string; to: string }[];
+}
+
 /**
  * Left-to-right column per node: 0 for nodes nothing feeds, otherwise one more
  * than the deepest node feeding it. A graph with a cycle can't be layered and
  * throws (a crafting loop would also make "cheapest way to make X" meaningless).
  */
-export function layerNodes(graph: FlowGraph): Map<string, number> {
+export function layerNodes(graph: LayerableGraph): Map<string, number> {
   const incoming = new Map<string, string[]>();
   for (const n of graph.nodes) incoming.set(n.id, []);
   for (const e of graph.edges) incoming.get(e.to)?.push(e.from);

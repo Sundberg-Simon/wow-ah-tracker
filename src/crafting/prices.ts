@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { fetchCommodityBooks, latestBooks, saveBooks, type CommodityDumpFetcher, type PriceBook } from "./market.js";
+import { getVendorPrices, vendorBook } from "./vendorPrices.js";
 
 export interface PriceLoad {
   books: Map<number, PriceBook>;
@@ -46,6 +47,16 @@ export async function loadPrices(
     }
   }
 
+  // Freshness is reported off the AH books only - a vendor price isn't a Blizzard dump observation.
   const observed = [...books.values()].map((b) => b.observedAt).sort();
-  return { books, source, error, observedOldest: observed[0] ?? null, observedNewest: observed.at(-1) ?? null };
+  const observedOldest = observed[0] ?? null;
+  const observedNewest = observed.at(-1) ?? null;
+
+  // Vendor-priced items replace their AH book entirely: unlimited stock at a fixed price beats
+  // whatever the AH ladder says, and buying more never gets more expensive.
+  for (const [itemId, unitPriceCopper] of getVendorPrices(db, ids)) {
+    books.set(itemId, vendorBook(itemId, unitPriceCopper));
+  }
+
+  return { books, source, error, observedOldest, observedNewest };
 }

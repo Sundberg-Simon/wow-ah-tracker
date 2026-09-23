@@ -114,22 +114,87 @@ const normalizeRealm = (s: string) => s.replace(/\s+/g, "").toLowerCase();
 const normalizeItemName = (s: string) => s.trim().replace(/\s+/g, " ").toLowerCase();
 const ORDER: Record<StockStatus, number> = { OUT: 1, LOW: 2, UNKNOWN: 3, OK: 4 };
 
+export interface ClusterId {
+  key: string;
+  label: string;
+  members: string[];
+}
+
+/** Groups a realm name into its connected-realm cluster (or a lone pseudo-cluster if unrecognised). Shared by computeStock and stockCoverage. */
+export function makeClusterResolver(connectedRealms: readonly { id: number; names: string[] }[]): (realmName: string) => ClusterId {
+  const byRealm = new Map<string, { id: number; names: string[] }>();
+  for (const cr of connectedRealms) for (const n of cr.names) byRealm.set(normalizeRealm(n), cr);
+  return (realmName: string) => {
+    const cr = byRealm.get(normalizeRealm(realmName));
+    return cr ? { key: `cr:${cr.id}`, label: cr.names[0], members: cr.names } : { key: `name:${normalizeRealm(realmName)}`, label: realmName, members: [] };
+  };
+}
+
+export interface StockCoverage {
+  /** Roster clusters where this item currently has any known stock (bags, or a fresh AH listing). */
+  clustersWithStock: number;
+  /** All roster clusters, regardless of whether this item has ever been held/sold there. */
+  totalClusters: number;
+}
+
+/**
+ * A simple binary coverage count: of ALL your roster's realm clusters (not just the ones this
+ * item happens to be "in scope" for - see computeStock), how many currently have any of it at
+ * all? Unlike the OUT/LOW/UNKNOWN/OK status above, this deliberately does NOT distinguish "never
+ * scanned" from "confirmed zero" - both just don't count. For "how many of my N realms currently
+ * have this item," not for judging whether a specific cluster needs restocking.
+ */
+export function stockCoverage(
+  itemId: number,
+  inputs: {
+    roster: readonly { realmName: string; characterName: string }[];
+    observations: readonly StockObservationRec[];
+    connectedRealms: readonly { id: number; names: string[] }[];
+    now: Date;
+    threshold?: number;
+  },
+): StockCoverage {
+  const threshold = inputs.threshold ?? DEFAULT_LOW_STOCK_THRESHOLD;
+  const nowMs = inputs.now.getTime();
+  const clusterOf = makeClusterResolver(inputs.connectedRealms);
+  const charKey = (realmName: string, characterName: string) => `${realmName}|${characterName}`;
+
+  const latest = new Map<string, StockObservationRec>();
+  for (const o of inputs.observations) {
+    if (o.itemId !== itemId) continue;
+    const k = `${charKey(o.realmName, o.characterName)}\u001e${o.source}`;
+    const cur = latest.get(k);
+    if (!cur || o.observedAt.getTime() > cur.observedAt.getTime()) latest.set(k, o);
+  }
+
+  const clusters = new Map<string, { realmName: string; characterName: string }[]>();
+  for (const r of inputs.roster) {
+    const key = clusterOf(r.realmName).key;
+    const arr = clusters.get(key) ?? [];
+    arr.push(r);
+    clusters.set(key, arr);
+  }
+
+  let clustersWithStock = 0;
+  for (const chars of clusters.values()) {
+    const charInputs: CharStockInput[] = chars.map((ch) => {
+      const k = charKey(ch.realmName, ch.characterName);
+      const bagsObs = latest.get(`${k}\u001ebags`);
+      const aucObs = latest.get(`${k}\u001eauctions`);
+      const aucFresh = aucObs ? nowMs - aucObs.observedAt.getTime() <= AUCTION_MAX_AGE_MS : false;
+      return { bags: bagsObs ? bagsObs.quantity : null, auctions: aucObs && aucFresh ? aucObs.quantity : null };
+    });
+    if (clusterStatus(charInputs, threshold).total > 0) clustersWithStock++;
+  }
+
+  return { clustersWithStock, totalClusters: clusters.size };
+}
+
 export function computeStock(inputs: StockInputs): StockReport {
   const threshold = inputs.threshold ?? DEFAULT_LOW_STOCK_THRESHOLD;
   const nowMs = inputs.now.getTime();
 
-  const clusterByRealm = new Map<string, { id: number; names: string[] }>();
-  for (const cr of inputs.connectedRealms) {
-    for (const n of cr.names) clusterByRealm.set(normalizeRealm(n), cr);
-  }
-  const clusterOf = (realm: string) => {
-    const cr = clusterByRealm.get(normalizeRealm(realm));
-    return {
-      key: cr ? `cr:${cr.id}` : `name:${normalizeRealm(realm)}`,
-      label: cr ? cr.names[0] : realm,
-      members: cr ? cr.names : [],
-    };
-  };
+  const clusterOf = makeClusterResolver(inputs.connectedRealms);
 
   // Latest observation per (character, source, item).
   const latest = new Map<string, StockObservationRec>();
