@@ -58,6 +58,23 @@ export interface ChainPlan {
   skipped: { operationId: number; name: string; reason: string }[];
 }
 
+/**
+ * Which operations a chain sweeps in after its root: every other one, in creation order (upstream first), EXCEPT
+ * operations that make a finished product you sell (`saleItemIds`, see saleItems.ts). Those answer a different question
+ * ("what does one cost, and how?" - procure/worth/the product cards) and would otherwise be pulled in whenever they
+ * happen to eat something the chain holds, e.g. the panthers eating the chain's gems, turning "is this Kyparite batch
+ * worth it" into a bill for dozens of Orbs of Mystery. Used by both the report and the CLI so they cannot drift.
+ */
+export function chainOperations(
+  operations: readonly ResolvedOperation[],
+  rootId: number,
+  saleItemIds: ReadonlySet<number>,
+): ResolvedOperation[] {
+  return operations
+    .filter((op) => op.operationId !== rootId && !op.outputs.some((o) => saleItemIds.has(o.itemId)))
+    .sort((a, b) => a.operationId - b.operationId);
+}
+
 function addTo(map: Map<number, Fraction>, itemId: number, quantity: Fraction): void {
   map.set(itemId, addFractions(map.get(itemId) ?? ZERO, quantity));
 }

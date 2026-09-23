@@ -13,7 +13,7 @@ import {
 import { craftingDbPath, openCraftingDb } from "../src/crafting/db.js";
 import { fetchItemName, searchItemsByName, type StaticGet } from "../src/crafting/itemLookup.js";
 import { fetchCommodityDump } from "../src/crafting/blizzardMarket.js";
-import { evaluateChain, formatChain } from "../src/crafting/chain.js";
+import { chainOperations, evaluateChain, formatChain } from "../src/crafting/chain.js";
 import { getCheapestCost } from "../src/crafting/cheapest.js";
 import { chainYieldSensitivity, formatSensitivity } from "../src/crafting/uncertainty.js";
 import { formatTrend, snapshotPrices, trendFor, watchedItemIds, TREND_WINDOW_DAYS } from "../src/crafting/history.js";
@@ -443,7 +443,7 @@ async function main(): Promise<void> {
       const perExecution = root.inputs[0].quantity;
       const inputUnits = values.ore ? parseCount("--ore", values.ore) : 3000;
       if (inputUnits % perExecution !== 0) throw new ValidationError(`--ore ${inputUnits} is not a multiple of ${perExecution} (what ${root.name} uses per execution)`);
-      const others = all.filter((o) => o.operationId !== rootId).sort((a, b) => a.operationId - b.operationId);
+      const others = chainOperations(all, rootId, new Set(listSaleItems(db).map((s) => s.itemId)));
       const ids = new Set<number>();
       for (const op of all) {
         for (const i of op.inputs) ids.add(i.itemId);
