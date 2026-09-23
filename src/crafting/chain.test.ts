@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { evaluateChain, formatChain, planChain } from "./chain.js";
+import { chainOperations, evaluateChain, formatChain, planChain } from "./chain.js";
 import { openCraftingDb } from "./db.js";
 import { addFractions, compareFractions, fraction, mulFractions, subFractions, ZERO } from "./fraction.js";
 import type { PriceBook } from "./market.js";
@@ -200,5 +200,25 @@ describe("evaluateChain (hand-checked)", () => {
     assert.match(text, /you save 1\.95g/);
     assert.match(text, /Transmute A to C\s+5 crafts\s+\+1\.00g/);
     assert.match(text, /Break-even price for Ore: 0\.06g each/);
+  });
+});
+
+describe("chainOperations", () => {
+  const op = (operationId: number, outputItemIds: number[]) =>
+    ({ operationId, name: `op${operationId}`, outputs: outputItemIds.map((itemId) => ({ itemId })) }) as unknown as ResolvedOperation;
+
+  it("takes every other operation in creation order, without the root", () => {
+    const ops = [op(3, [30]), op(1, [10]), op(2, [20])];
+    assert.deepEqual(chainOperations(ops, 1, new Set()).map((o) => o.operationId), [2, 3]);
+  });
+
+  it("leaves out operations that make a sale item, even one that eats what the chain holds", () => {
+    const ops = [op(1, [10]), op(2, [20]), op(3, [30]), op(4, [40])];
+    assert.deepEqual(chainOperations(ops, 1, new Set([30, 40])).map((o) => o.operationId), [2]);
+  });
+
+  it("keeps an operation whose outputs are only partly sale items out too (any sale output excludes it)", () => {
+    const ops = [op(1, [10]), op(2, [20, 99])];
+    assert.deepEqual(chainOperations(ops, 1, new Set([99])).map((o) => o.operationId), []);
   });
 });

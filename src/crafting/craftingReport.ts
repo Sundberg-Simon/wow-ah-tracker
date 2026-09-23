@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
-import { evaluateChain, type ChainEvaluation } from "./chain.js";
+import { chainOperations, evaluateChain, type ChainEvaluation } from "./chain.js";
+import { listSaleItems } from "./saleItems.js";
 import { backfillHistory, trendFor, watchedItemIds, type Trend } from "./history.js";
 import { chainYieldSensitivity, type YieldSensitivity } from "./uncertainty.js";
 import { buildFlowGraph, type FlowGraph } from "./flow.js";
@@ -88,7 +89,8 @@ export async function buildCraftingModel(args: {
   // operation with data is applied to what it gives you, in creation order.
   const known = operations.filter((op) => op.outputs.length > 0);
   const chainRoot = known.find((op) => op.kind === "prospect");
-  const chainOthers = chainRoot ? known.filter((op) => op !== chainRoot).sort((a, b) => a.operationId - b.operationId) : [];
+  const saleItemIds = new Set(listSaleItems(db).map((s) => s.itemId));
+  const chainOthers = chainRoot ? chainOperations(known, chainRoot.operationId, saleItemIds) : [];
   const chain =
     chainRoot && chainOthers.length > 0
       ? evaluateChain({ root: chainRoot, rootExecutions: executions, others: chainOthers, books: prices.books, policies, nameOf })

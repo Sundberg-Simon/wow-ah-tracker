@@ -1158,27 +1158,27 @@ eftersom.]
       x-siffran är Simons egen lagerdata, hör hemma i hans rapport — samma
       regel som #15 — inte här) och `0/81` för de sju nya (väntat, ingen
       scanning-data än). Format bekräftat literalt, ingen reduktion.
-    - **UPPTÄCKT SIDOEFFEKT 2026-09-23, OLÖST — `chain`-kommandot/rapportens
-      "whole chain"-sektion är nu trasig**: när Vial/panter/mount-recepten
-      registrerades (för kort-funktionen ovan) började `chain.ts`s
-      "others"-lista (som redan innan tog ALLA operationer med känt utfall,
-      i id-ordning, och tillämpade varje en som "kan köras på det du håller,
-      köp resten") även svepa in Sunstone/Jade/Ruby/Sapphire/Jeweled Onyx
-      Panther. Eftersom dessa fyra pantrar äkta konsumerar de transmuterade
-      gemsen (Sun's Radiance osv, som redan produceras av kedjan), är detta
-      mekaniskt korrekt — men resultatet är oanvändbart just nu: `npm run
-      crafting -- chain` vill nu köpa 42 Orb of Mystery (836 142g) som en
-      del av "hela kedjan" (dominerar totalt över den ursprungliga
-      ~7 000g Kyparite-batch-frågan), och `Result: UNKNOWN` eftersom
-      Serpent's Eye och de fyra pantrarna saknar `policy`. INTE en bugg i
-      den nya kort-funktionen (den använder `procure()` oberoende, opåverkad)
-      — ett skalningsproblem i `chain.ts`s "svep in allt känt"-antagande,
-      som höll när alla operationer hörde till SAMMA Kyparite-produktfamilj
-      men inte längre håller nu när DB:n har flera orelaterade produktlinjer
-      i samma operationstabell. Simon medveten om detta 2026-09-23, ännu
-      inte bestämt hur det ska lösas (policy sätta på pantrarna? begränsa
-      vilka operationer som får svepas in i en given kedja? något annat?)
-      — fråga honom innan du rör `chain.ts`s "others"-urval.
+    - **`chain`-sidoeffekten (upptäckt och LÖST 2026-09-23)**: när Vial/panter/
+      mount-recepten registrerades började `chain`-kommandot och rapportens
+      "whole chain"-sektion svepa in pantrarna (de äter kedjans transmuterade
+      gems) och köpa dussintals Orb of Mystery — "är den här Kyparite-batchen
+      värd det" blev en räkning på hundratusentals guld. Grundorsak: "others"-
+      listan (varje operation med känt utfall utom roten) byggdes inline på TVÅ
+      ställen — `craftingReport.ts` och CLI:ts `chain` — utan avgränsning, och
+      `planChain` tillämpar varje operation som kan förbruka NÅGOT kedjan håller.
+      Det höll när alla operationer var samma Kyparite-familj, men inte med flera
+      produktlinjer i samma tabell. **Fix**: en delad `chainOperations()` i
+      `chain.ts` (används av båda, så de kan inte glida isär) som utesluter
+      operationer vars output är ett `sale_item` — färdiga produkter besvarar en
+      annan fråga (`procure`/`worth`/produktkorten, som är opåverkade) och ska
+      inte svepas in i någon annans kedja. De fyra små pantrarna är både sålda
+      OCH input till Jeweled Onyx Panther; det påverkar inte `procure`, som
+      aldrig läser `sale_items`. **Begränsning**: en ny produkt som inte hunnit
+      `sale mark`:as kan tillfälligt svepas in igen. Verifierat: 3 nya tester,
+      `chain` köper nu bara Kyparite + Golden Lotus (~6 200g).
+      **Kvar**: `chain` ger fortfarande `Result: UNKNOWN` — ett SEPARAT skäl:
+      Serpent's Eye (från Sparkling Shard-konverteringen) saknar `policy`. Ett
+      val för Simon (need/sell/ignore), inte något att sätta tyst.
     - **Bästa plan / "bara de lönsamma stegen" — byggd och SEDAN BORTTAGEN
       (2026-09-21)**: en `optimizeChain` som provade varje kombination av
       kedjans steg och rekommenderade att hoppa över förlustbringande
