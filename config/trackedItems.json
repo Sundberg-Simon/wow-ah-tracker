@@ -117,6 +117,6 @@
   { "id": 83090, "name": "Sapphire Panther", "category": "permanent", "active": true, "crafted": true, "est_cost_per_unit": null },
   { "id": 83089, "name": "Sunstone Panther", "category": "permanent", "active": true, "crafted": true, "est_cost_per_unit": null },
   { "id": 271441, "name": "Crushing Coiler Coif", "category": "patch-specific", "active": true, "variants": [308, 311] },
-  { "id": 271440, "name": "Greaves of the Noxious Depths", "category": "patch-specific", "active": true, "variants": [308, 311] },
+  { "id": 271440, "name": "Greaves of the Noxious Depths", "category": "patch-specific", "active": true, "variants": [305, 308, 311] },
   { "id": 271435, "name": "Slippers of the Hissing Cult", "category": "patch-specific", "active": true, "variants": [308] }
 ]
