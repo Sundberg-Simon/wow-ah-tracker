@@ -890,13 +890,295 @@ eftersom.]
       * Operationerna, items och `need`-policyn på Truegold och Pyrium Bar ligger
         i den lokala crafting-DB:n (inte i repot); Transmute: Truegold har sitt
         utfall från loggade körningar (`--from-runs`), Smelt Pyrite är fast.
-      * Vial of the Sands' övriga reagens är kartlagda men inte inlagda:
-        Pyrium-Laced Crystalline Vial (65892) och Sands of Time (65893) saknar
-        recept i Cataclysm-tierna (köp-bara, och de allra dyraste posterna);
-        Flask of the Winds (21994) och Flask of Titanic Strength (21995) har
-        recept med Volatile Life/Whiptail/Azshara's Veil resp. Cinderbloom;
-        Deepstone Oil (21983) = 1 Albino Cavefish → 0,5–2,5 (varierar, kräver
-        loggade körningar). Simon matar in Vial-receptet själv, en gång.
+      * **Vial of the Sands-receptet (verifierat mot Blizzards API 2026-09-22,
+        recept-id 24003, Cataclysm Alchemy → Mounts, crafted item 65891,
+        `crafted_quantity: 1`)**: 1 Pyrium-Laced Crystalline Vial (65892) +
+        8 Sands of Time (65893) + 12 Truegold (58480) + 8 Flask of the Winds
+        (58087) + 8 Flask of Titanic Strength (58088) + 8 Deepstone Oil
+        (56850). Simon matar in receptet själv i den lokala DB:n när det är
+        dags (ej gjort än; operationerna för de tre craftbara reagensen
+        nedan är satta upp, men själva Vial-operationen inte).
+        **Rättad lärdom**: den tidigare raden här blandade ihop recept-id
+        med reagensens egna item-id — "Flask of the Winds (21994)",
+        "Flask of Titanic Strength (21995)" och "Deepstone Oil (21983)" var
+        i själva verket RECEPT-id:n (bekräftade recept i Cataclysm
+        Alchemy-tiern), inte itemens id:n (58087/58088/56850) — och de tre
+        siffrorna råkar dessutom vara tre helt orelaterade riktiga items
+        (Belt of Heroism, Boots of Heroism, Incomplete Banner of
+        Provocation). Samma recept-id-mot-crafted-item-id-fälla som redan
+        gäller överallt annars i #16 — verifiera alltid mot `crafted_item.id`
+        innan ett nummer i den här filen litas på.
+        Pyrium-Laced Crystalline Vial och Sands of Time saknar recept i
+        Cataclysm-tiererna (köp-bara, de dyraste posterna i receptet).
+        De tre craftbara reagensen, recept verifierade mot API 2026-09-22:
+        - **Deepstone Oil** (recept 21983, crafted item 56850) = 1 Albino
+          Cavefish (53065) → `crafted_quantity` 0,5–2,5 (API:t ger ett
+          INTERVALL, inte en punktsiffra) — satt upp som `craft`,
+          `--from-runs` (Simon loggar sina egna resultat, se nedan).
+        - **Flask of the Winds** (recept 21994, crafted item 58087) = 8
+          Volatile Life (52329) + 8 Azshara's Veil (52985) + 8 Whiptail
+          (52988) + 1 Crystal Vial (3371) → API:ts `crafted_quantity.value`
+          är 1, men precis som transmutes i #16 är en nominell API-siffra
+          referens, inte fakta — satt upp som `craft`, `--from-runs`.
+        - **Flask of Titanic Strength** (recept 21995, crafted item 58088) =
+          8 Volatile Life (52329) + 8 Cinderbloom (52983) + 8 Whiptail
+          (52988) + 1 Crystal Vial (3371) → samma `--from-runs`-motivering.
+        Alla tre items + reagenskedjan (65891/65892/65893/58087/58088/56850
+        + 52329/52985/52988/3371/52983/53065) registrerade i den lokala
+        crafting-DB:n 2026-09-22.
+    - **Fasta NPC-vendorpriser (byggt 2026-09-22)**: schema v7,
+      `vendor_prices`-tabell + `src/crafting/vendorPrices.ts`. Ett litet
+      antal reagens (Sands of Time, Pyrium-Laced Crystalline Vial, Crystal
+      Vial — alla i Vial of the Sands-kedjan) köps till ett fast NPC-pris,
+      inte bud på AH. Blizzards item-API har ett `purchase_price`-fält på
+      nästan alla items oavsett om någon vendor faktiskt säljer dem
+      (oftast bara en formel, ~4x `sell_price`) — ett vendorpris här är
+      därför ALLTID ett fakta Simon bekräftar själv, aldrig härlett från
+      det fältet. Bekräftade priser 2026-09-22: Sands of Time 2 400g,
+      Pyrium-Laced Crystalline Vial 4 000g, Crystal Vial 20 koppar
+      (härledd från Blizzards egen `purchase_price`/`purchase_quantity`:
+      400/20 — reagentvendor-item, allmänt känt, inte en gissning).
+      CLI: `vendor set "<item>" <pris>` (pris som `2400g`/`20c`/`12g50s`,
+      `parseMoney` i `money.ts`), `vendor list`, `vendor clear`.
+      En vendors lager behandlas som obegränsat: i `prices.ts` ERSÄTTER
+      vendorpriset AH-boken för det itemet helt (istället för att vägas in
+      som ännu en prisnivå) — ingen förlitar sig på att undercutta en
+      vendor på ett item vem som helst kan köpa dit igen, och kostnaden
+      stiger aldrig med mängden. Vendorpriset räknas INTE in i
+      "senaste Blizzard-dump"-färskheten som visas i CLI:t, och sparas
+      aldrig till `market_snapshots`/`market_history` (det är inte en
+      marknadsobservation). `procure.ts`/`flowHtml.ts`s "BUY"-etikett
+      skiljer nu uttryckligen "on the auction house" från "from a vendor"
+      (bar `book.observedAt === "vendor"`) — innan denna fix visade både
+      `cheapest` och Crafting-fliken felaktigt "BUY on the auction house"
+      även för ett vendor-pris.
+    - **Pantermounts, ej de Jeweled (verifierat mot Blizzards API 2026-09-22,
+      Pandaria Jewelcrafting → Mounts)**: fyra separata recept, identisk
+      struktur, bara gemmet skiljer — samma fyra transmuterade epic-gems
+      som redan finns i kedjan:
+      | Mount | Recept-id | Gem (x20) |
+      |---|---|---|
+      | Sunstone Panther | 26497 | Sun's Radiance (76142) |
+      | Jade Panther | 26512 | Wild Jade (76139) |
+      | Ruby Panther | 26596 | Primordial Ruby (76131) |
+      | Sapphire Panther | 26597 | River's Heart (76138) |
+
+      Alla fyra tar dessutom: 1 Orb of Mystery (83092) + 4 Living Steel
+      (72104) + 2 Serpent's Eye (76734). (Jeweled Onyx Panther, 26284,
+      medvetet uteslutet — Simon bad specifikt om "inte de Jeweled".)
+      Inga av de fyra mount-operationerna själva är inlagda än (samma
+      "vänta med huvudreceptet"-mönster som Vial of the Sands ovan) — bara
+      de delade reagensen.
+      - **Orb of Mystery**: Blizzards item-`description` säger uttryckligen
+        "Sold by Big Keech in the Vale of Eternal Blossoms" — starkare
+        bevis än det vanliga formel-baserade `purchase_price`-fältet.
+        Simon bekräftade 2026-09-22 det faktiska priset: **20 000g**,
+        registrerat som vendorpris.
+      - **Serpent's Eye**: ett rått, ohugget Pandaria-ädelsten-item.
+        `purchase_price` var exakt 4x `sell_price` — samma opålitliga
+        formelmönster som redan konstaterats för andra items, alltså INTE
+        ett äkta vendorpris. Fanns inte i Simons loggade Kyparite-
+        prospecting-utfall. Simon förtydligade 2026-09-22: det är en
+        riktig, fast konvertering — högerklicka 10 Sparkling Shard (90407,
+        själv en Kyparite-prospecting-biprodukt) i väskan för att få 1
+        Serpent's Eye (en item-use-effekt, inte ett yrkesrecept, så inget
+        recept-id att verifiera mot). Inlagt som operation #15 ("Convert
+        Sparkling Shard to Serpent's Eye", `craft`, fast 10:1). Verifierat
+        2026-09-22: `cheapest` jämför nu BUY (8.88g/st) mot denna konvertering
+        (9.00g/st) och de ligger nära varandra, som väntat — marknaden
+        arbitrerar naturligt mot konverteringskursen.
+      - **Full kostnad per mount, live-priser 2026-09-22** (delade reagens
+        21 637,76g: Orb of Mystery vendor 20 000g + 4 Living Steel köpta
+        1 620g + 2 Serpent's Eye köpta 17,76g; gemmet i sig kostar 137–182g
+        beroende på vilket): total ≈ 21 776–21 820g per mount,
+        break-even AH-pris efter 5 % avgift ≈ 22 922–22 969g. Ett
+        ögonblick, inte ett stabilt tal — samma volatilitets-varning som
+        Vial of the Sands.
+    - **Jeweled Onyx Panther, som en sjätte produkt (byggt 2026-09-22,
+      Pandaria Jewelcrafting → Mounts, recept-id 26284)**: verifierat mot
+      Blizzards API — receptet är EXAKT 1x Sunstone Panther + 1x Jade
+      Panther + 1x Ruby Panther + 1x Sapphire Panther, inga andra reagens.
+      Bekräftar Simons egen förenkling ordagrant: kostnaden räknas som
+      summan av de fyra små pantrarnas fulla craftingkostnad (inte som en
+      egen materiallista). Mount-operationen själv är INTE inlagd än (samma
+      "vänta med huvudreceptet"-mönster). Live-priser 2026-09-22: summa
+      87 195,49g, break-even AH-pris efter 5 % avgift ≈ 91 784,72g.
+    - **Sale items — enkel bokföringsmarkör (byggt 2026-09-22)**: schema v8,
+      `sale_items`-tabell + `src/crafting/saleItems.ts`, CLI `sale mark
+      "<item>" [--note "<text>"]` / `sale list` / `sale unmark`. Rent
+      antecknar VILKA färdiga items Simon faktiskt säljer — ingen kod i
+      pricing/sourcing-analysen (`cheapest`/`chain`/`worth`) läser detta än,
+      medvetet separat från `item_policy` (som värderar en operations
+      BIPRODUKTER, ett annat begrepp — CLI-gruppen heter därför `sale`, inte
+      `sell`, för att inte krocka med `policy set sell`). Ordningen
+      items lades till bevaras via en egen `entry_id AUTOINCREMENT`, inte
+      `added_at` (som bara har sekundupplösning och kan ge oavsiktlig
+      item_id-sortering vid krockande tidsstämplar). Markerat 2026-09-22,
+      utökat samma dag med de två Engineering-mounten nedan — se den
+      punkten för den fullständiga, aktuella listan.
+    - **Två Engineering-mounts, FULLT inlagda inkl. huvudreceptet (byggt
+      2026-09-22, Pandaria Engineering → Mounts, verifierat mot Blizzards
+      API)**: till skillnad från Vial of the Sands/pantrarna bad Simon
+      uttryckligen att låsa in dessa två helt, inklusive själva
+      mount-operationen (inte bara de delade reagensen).
+      - **Depleted-Kyparium Rocket** (recept 27335, crafted item 87250):
+        12 Living Steel + 200 Kyparite + 3 Orb of Mystery + 12
+        High-Explosive Gunpowder + 12 Spirit of Harmony + 20 Ghost Iron
+        Bolts.
+      - **Geosynchronous World Spinner** (recept 27338, crafted item
+        87251) — OBS namnet: två ord ("World Spinner"), inte
+        "Worldspinner" som ursprungligen skrevs i chatten: 12 Living Steel
+        + 12 Trillium Bar + 12 Spirit of Harmony + 20 Ghost Iron Bolts + 3
+        Orb of Mystery.
+      - Båda tar 3x Orb of Mystery och 12x Living Steel (jämfört med
+        pantrarnas 1x/4x) — samma styckkostnader (vendor 20 000g resp.
+        buy-vs-Riddle-of-Steel), bara fler.
+      - **Ny kedja, två led ner till Ghost Iron Bar** (redan känt item,
+        `Smelt Ghost Iron`-operationen finns sen tidigare): "Ghost Iron
+        Bolts" (recept 27339) = 3 Ghost Iron Bar → 2 Ghost Iron Bolts;
+        "High-Explosive Gunpowder" (recept 27342) = 1 Ghost Iron Bar → 2
+        High-Explosive Gunpowder. Båda `craft`, fast förhållande (Blizzards
+        `crafted_quantity.value` är en heltalskonstant här, ingen
+        sannolikhet inblandad som för Alchemy-transmutes — Engineering-
+        "Reagents"-kategorin har ingen proc-mekanik). Operationerna heter
+        medvetet samma som sina crafted items (matchar Blizzards egna
+        receptnamn för den här sortens enkla konvertering — samma mönster
+        som "Smelt Ghost Iron"/"Smelt Pyrite", ingen namnkrock i kod
+        eftersom items och operationer är separata namnrymder).
+      - **Verifierat 2026-09-22**: `cheapest` löser hela kedjan korrekt
+        ner till Ghost Iron Ore på båda mounten (Ghost Iron Bolts/
+        Gunpowder craft billigare än att köpa dem färdiga; Smelt Ghost
+        Iron billigare än att köpa barren). Live-priser: Depleted-Kyparium
+        Rocket 66 627,80g (break-even efter 5 % avgift 70 134,53g),
+        Geosynchronous World Spinner 67 122,72g (break-even 70 655,49g).
+        Markerade som `sale_items` 2026-09-22 (samma dag) — Simons
+        produktlista är nu 8 items: Vial of the Sands, de fyra pantrarna,
+        Jeweled Onyx Panther, Depleted-Kyparium Rocket och Geosynchronous
+        World Spinner.
+    - **Vial of the Sands + alla fem pantermounten fullt inlagda som
+      operationer 2026-09-23** (tidigare medvetet uppskjutet, se ovan) —
+      alla 8 sale items är nu operation-outputs, vilket krävdes för att
+      `procure`/`cheapest` ska kunna prissätta dem automatiskt (se nästa
+      punkt). Samma sex recept som redan var verifierade mot Blizzards API
+      tidigare, bara nu faktiskt registrerade med `op add`.
+    - **Sale item-kort med klickbart flödesschema, byggt 2026-09-23**:
+      Crafting-fliken har nu en sektion "Your products" högst upp — ett
+      kort per `sale_items`-item, med total intjäning (mest framträdande),
+      antal sålda, senaste sälj (tidpunkt + realm), snittsäljpris, aktuell
+      crafting-kostnad och förväntad vinst (snittsäljpris − kostnad). De
+      fyra försäljningsmåtten kommer från `earnings_sales` (#13), kostnaden
+      från crafting-DB:ns `procure`-motor — kortet korsrefererar alltså de
+      två separata datakällorna för första gången. Matchning mot
+      `earnings_sales`: namnmatchning (item_id är NULL på alla sales
+      hittills, #13), med en egen kopia av samma suffix-hopslagningsregel
+      som `report.ts` redan använder (`src/earnings/aggregate.ts` har ingen
+      testsele, så regeln kopierades hellre än delades — ändra båda om
+      regeln någonsin ändras). **Explicit uteslutet nu**: aktuellt lägsta
+      säljpris (live AH) — dessa är unika BOE-mounts, inte commodities, och
+      `market.ts` prissätter uttryckligen bara commodities ("Non-commodity
+      items (per connected realm) are a later step" — aldrig byggt). Att
+      bygga per-realm-prissättning hade krävt antingen (a) lägga till
+      dessa 8 items i `config/trackedItems.json` så huvud-synken börjar
+      samla riktiga per-realm-priser via Neon (men det gör priset synligt
+      på publika Pages, och ökar synkens per-tick-arbete), eller (b) ny kod
+      som hämtar en hel realms icke-commodity-auktionsdump on demand (dyrt,
+      och oklart vilken/vilka realmer). Simon valde att hoppa över det för
+      v1 — kan tas upp som eget steg senare.
+      **Varje kort är klickbart** (`<details>`, ingen JS): klicket visar
+      `procure()`-trädet för just det itemet som ett riktigt flödesschema
+      (boxar + pilar, vänster-till-höger — råvaror/köp längst till vänster,
+      slutprodukten längst till höger), inte den gamla inbuckade
+      punktlistan. Ny modul `src/crafting/procureFlow.ts` gör om ett
+      `ProcureResult`-träd till noder+kanter; `flow.ts`s `layerNodes`
+      (kolumnläggningen som redan användes för hela-kedjan-diagrammet)
+      generaliserades till att ta vilken `{id}`-nod-/`{from,to}`-kant-graf
+      som helst (`LayerableGraph`), exakt vad filens egen kommentar redan
+      förutspådde ("growing it into a real flowchart later ... only means
+      replacing the renderer"). Medvetet INTE samma nod-delning som
+      hela-kedjan-grafen: samma item kan förekomma flera gånger i ett
+      procure-träd med OLIKA mängder (Ghost Iron Bar under Bolts vs under
+      Gunpowder), så att slå ihop dem till en nod hade blandat ihop två
+      olika kvantiteter — varje trädposition får sin egen nod-id (path-
+      baserad, t.ex. `item:0.1.0`).
+      **Verifierat mot skarp data 2026-09-23**: en riktig rapportkörning
+      (`npm run report:earnings`) visade Vial of the Sands-kortet korrekt
+      ifyllt med Simons faktiska sälj-historik (siffrorna själva hör hemma
+      i Simons egen rapport, inte här — samma regel som #13/earnings i
+      allmänhet) och ett korrekt 7-kolumners flödesschema hela vägen från
+      råvaror till Vial. Chrome-tillägget var
+      inte anslutet den här sessionen, så själva klicket (expandera/
+      kollapsa) verifierades ALDRIG visuellt i en riktig webbläsare — bara
+      den genererade HTML-strukturen (giltig `<details>`/`<summary>`,
+      ingen JS inblandad, så risken är låg, men opröv innan du litar på det).
+    - **Lagerstatus på sale item-korten, "x/81", byggt 2026-09-23**: en till
+      rad per kort — binär täckning, INTE samma nyanserade OUT/LOW/UNKNOWN/OK
+      som stock-sektionen (#15) redan visar. `x` = antal av Simons
+      roster-realmkluster som just nu har NÅGOT känt lager av just det
+      itemet (väska ELLER färsk AH-listning, samma 48h-regel som #15); `81`
+      = TOTALA antalet roster-kluster, oavsett om itemet någonsin
+      hållits/sålts där (till skillnad från #15:s `computeStock`, som bara
+      visar kluster "i scope"). Aldrig en reducerad bråkform (t.ex. skulle
+      `18/81` ALDRIG visas som `2/9`) — ren strängformatering
+      (`${x}/${y}`), `fraction.ts` används inte alls här. "Aldrig scannad"
+      räknas som 0 här (medvetet förenklat på Simons uttryckliga begäran —
+      "jag är bara intresserad av det binära"), INTE som en separat
+      unknown-status som resten av #15 noga skiljer på.
+      Ny funktion `stockCoverage()` i `src/earnings/stock.ts` (samma fil
+      som #15, delar `clusterStatus`; klusterupplösningen bröts ut till en
+      egen exporterad `makeClusterResolver()` som BÅDE `computeStock` och
+      `stockCoverage` nu använder — inget nytt duplicerat mönster).
+      `src/crafting/saleItemCards.ts`s `buildSaleItemCards()` tar nu en
+      valfri `stock`-parameter (observations/roster/connectedRealms/now,
+      samma form som `reportEarnings.ts`s befintliga `stockInputs`) och
+      anropar `stockCoverage()` per item; utan den blir kortets `stock` null
+      och visar "not tracked".
+      **Testinfrastruktur som saknades helt lades till**: varken
+      `src/earnings/aggregate.ts` eller `stock.ts` hade någon testfil eller
+      npm-skript innan (`test:earnings` fanns inte). Lade till
+      `src/earnings/stock.test.ts` (9 tester, inkl. att refaktoreringen av
+      `computeStock` inte ändrat beteende) + `"test:earnings"` i
+      package.json, matchar `test:crafting`/`test:sync`-mönstret.
+      **Krävde att alla 8 sale items lades till i `config/trackedItems.json`
+      (publik fil, #8) som `crafted: true`, `category: "permanent"`** —
+      bara Vial of the Sands och Sky Golem var det innan; de sju andra
+      (Depleted-Kyparium Rocket, Geosynchronous World Spinner, de fyra
+      pantrarna, Jeweled Onyx Panther) hade ALDRIG någon stock-infrastruktur
+      (varken addon-scanning eller rapportstöd) före detta — Simon bad
+      uttryckligen om detta ("wire them all up now") snarare än att bara
+      visa "not tracked" på de sju. `category: "permanent"` betyder ingen
+      auktionssnapshot-insamling alls för dem (#14) — bara addonets bag/AH-
+      lagerskanning, som redan fanns för crafted-items generellt.
+      **INTE pushat än** — precis som den tidigare `crafted=true`-
+      data.lua-regeln i #15, måste Simon uttryckligen säga till. Innan push
+      + en synk-körning + addonets nästa `data.lua`-hämtning har skett
+      visar alla sju nya items `0/81` (aldrig scannade), inte för att de
+      saknar lager utan för att addonet ännu inte vet att leta efter dem.
+      **Verifierat mot skarp data 2026-09-23**: `npm run report:earnings`
+      gav Vial of the Sands ett rimligt icke-noll x/81 (den faktiska
+      x-siffran är Simons egen lagerdata, hör hemma i hans rapport — samma
+      regel som #15 — inte här) och `0/81` för de sju nya (väntat, ingen
+      scanning-data än). Format bekräftat literalt, ingen reduktion.
+    - **UPPTÄCKT SIDOEFFEKT 2026-09-23, OLÖST — `chain`-kommandot/rapportens
+      "whole chain"-sektion är nu trasig**: när Vial/panter/mount-recepten
+      registrerades (för kort-funktionen ovan) började `chain.ts`s
+      "others"-lista (som redan innan tog ALLA operationer med känt utfall,
+      i id-ordning, och tillämpade varje en som "kan köras på det du håller,
+      köp resten") även svepa in Sunstone/Jade/Ruby/Sapphire/Jeweled Onyx
+      Panther. Eftersom dessa fyra pantrar äkta konsumerar de transmuterade
+      gemsen (Sun's Radiance osv, som redan produceras av kedjan), är detta
+      mekaniskt korrekt — men resultatet är oanvändbart just nu: `npm run
+      crafting -- chain` vill nu köpa 42 Orb of Mystery (836 142g) som en
+      del av "hela kedjan" (dominerar totalt över den ursprungliga
+      ~7 000g Kyparite-batch-frågan), och `Result: UNKNOWN` eftersom
+      Serpent's Eye och de fyra pantrarna saknar `policy`. INTE en bugg i
+      den nya kort-funktionen (den använder `procure()` oberoende, opåverkad)
+      — ett skalningsproblem i `chain.ts`s "svep in allt känt"-antagande,
+      som höll när alla operationer hörde till SAMMA Kyparite-produktfamilj
+      men inte längre håller nu när DB:n har flera orelaterade produktlinjer
+      i samma operationstabell. Simon medveten om detta 2026-09-23, ännu
+      inte bestämt hur det ska lösas (policy sätta på pantrarna? begränsa
+      vilka operationer som får svepas in i en given kedja? något annat?)
+      — fråga honom innan du rör `chain.ts`s "others"-urval.
     - **Bästa plan / "bara de lönsamma stegen" — byggd och SEDAN BORTTAGEN
       (2026-09-21)**: en `optimizeChain` som provade varje kombination av
       kedjans steg och rekommenderade att hoppa över förlustbringande
@@ -1314,7 +1596,6 @@ eftersom.]
   loggningstillfället (inte manuellt underhållna patch-datumintervall).
   Visa flera "bästa"-listor (vinst, omsättning, volym, största enskilda
   sälj) sida vid sida istället för att välja en enda "bästa"-mätvariabel.
-
 ## Obligatoriskt sista steg — innan du säger att något är klart att testa
 Kolla i Actions-fliken (eller `gh run list`/`gh run view`) att körningen
 faktiskt lyckades, inte bara att den triggades eller att en push gick

@@ -155,6 +155,27 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (item_id, observed_at)
   );
   `,
+  // v7: fixed NPC vendor prices, for the handful of reagents sold at a set price rather than bid up on the AH
+  // (see vendorPrices.ts). Confirmed by the player, never inferred from Blizzard's item.purchase_price field.
+  `
+  CREATE TABLE vendor_prices (
+    item_id           INTEGER PRIMARY KEY CHECK (item_id > 0),
+    unit_price_copper INTEGER NOT NULL CHECK (unit_price_copper > 0),
+    updated_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+  );
+  `,
+  // v8: a simple marker for "this is a finished product I actually sell" (see saleItems.ts). Purely a note for
+  // now - nothing in the pricing/sourcing analysis reads it yet.
+  `
+  -- entry_id (not item_id) is the primary key so insertion order survives even when two items are
+  -- marked within the same second (added_at only has second resolution).
+  CREATE TABLE sale_items (
+    entry_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id    INTEGER NOT NULL UNIQUE CHECK (item_id > 0),
+    note       TEXT,
+    added_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+  );
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

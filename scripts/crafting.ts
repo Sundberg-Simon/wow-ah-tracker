@@ -18,13 +18,15 @@ import { getCheapestCost } from "../src/crafting/cheapest.js";
 import { chainYieldSensitivity, formatSensitivity } from "../src/crafting/uncertainty.js";
 import { formatTrend, snapshotPrices, trendFor, watchedItemIds, TREND_WINDOW_DAYS } from "../src/crafting/history.js";
 import { fractionToNumber } from "../src/crafting/fraction.js";
-import { formatGold } from "../src/crafting/money.js";
+import { formatGold, parseMoney } from "../src/crafting/money.js";
 import { formatProcure, procure } from "../src/crafting/procure.js";
 import { decide, formatVerdict } from "../src/crafting/verdict.js";
 import { DEFAULT_EXECUTIONS } from "../src/crafting/craftingReport.js";
 import { describeItem, getItemName, listItems, resolveItem, setItemName } from "../src/crafting/items.js";
 import { clearPolicy, getPolicies, POLICIES, setPolicy } from "../src/crafting/policy.js";
 import { loadPrices } from "../src/crafting/prices.js";
+import { clearVendorPrice, getVendorPrices, setVendorPrice } from "../src/crafting/vendorPrices.js";
+import { listSaleItems, markSaleItem, unmarkSaleItem } from "../src/crafting/saleItems.js";
 import { computeEconomics } from "../src/crafting/profit.js";
 import { analyzeSourcing } from "../src/crafting/sourcing.js";
 import {
@@ -75,6 +77,16 @@ const USAGE = `WoW Crafting Optimizer - local data CLI (data-private/crafting.sq
   npm run crafting -- policy set <${POLICIES.join("|")}> <item> [<item> ...]
   npm run crafting -- policy list
   npm run crafting -- policy clear <item> [<item> ...]
+
+  npm run crafting -- vendor set "<item>" <price>     price like 2400g, 20c or 12g50s - a fixed NPC price, confirmed
+                                                         by you, that replaces the AH price for that item everywhere
+  npm run crafting -- vendor list
+  npm run crafting -- vendor clear <item> [<item> ...]   back to AH-priced
+
+  npm run crafting -- sale mark "<item>" [--note "<text>"]   note that this finished item is one you actually sell
+                                                         (a bookkeeping marker only - nothing else reads it yet)
+  npm run crafting -- sale list
+  npm run crafting -- sale unmark <item> [<item> ...]
   npm run crafting -- worth <item> [--units N]           "is it worth crafting?" yes/no by how much, what would flip it, and - only
                                                          if yes - the same question for each input ("and how?"). Default 100 units.
   npm run crafting -- cheapest <item> [--units N] [--executions N]   cheapest way to end up with N of it (default 100): buy it or
@@ -129,7 +141,7 @@ const staticGet: StaticGet = (path, params) => blizzardGet(path, { namespace: "s
 
 // Commands that change the stored data. Each one is followed by an automatic backup: that is the
 // moment new, irreplaceable observations exist.
-const WRITE_COMMANDS = new Set(["item add", "item fetch", "op add", "op remove", "prospect add", "prospect remove", "policy set", "policy clear", "run add", "run remove"]);
+const WRITE_COMMANDS = new Set(["item add", "item fetch", "op add", "op remove", "prospect add", "prospect remove", "policy set", "policy clear", "vendor set", "vendor clear", "sale mark", "sale unmark", "run add", "run remove"]);
 
 const kb = (bytes: number) => `${(bytes / 1024).toFixed(1)} KB`;
 
@@ -384,6 +396,42 @@ async function main(): Promise<void> {
       const policies = [...getPolicies(db)].sort((a, b) => a[1].localeCompare(b[1]) || a[0] - b[0]);
       if (policies.length === 0) console.log("No policies set.");
       for (const [itemId, policy] of policies) console.log(`${policy.padEnd(7)} ${describeItem(db, itemId)}`);
+    } else if (group === "vendor" && action === "set") {
+      if (rest.length < 2) throw new ValidationError('usage: vendor set "<item>" <price>  (price like 2400g, 20c or 12g50s)');
+      const price = rest[rest.length - 1];
+      const itemId = resolveItem(db, rest.slice(0, -1).join(" "));
+      const copper = parseMoney(price);
+      setVendorPrice(db, itemId, copper);
+      console.log(`${describeItem(db, itemId)}: vendor price ${formatGold(copper)} each (replaces the AH price everywhere)`);
+    } else if (group === "vendor" && action === "clear") {
+      if (rest.length === 0) throw new ValidationError("usage: vendor clear <item> [<item> ...]");
+      for (const raw of rest) {
+        const itemId = resolveItem(db, raw);
+        console.log(
+          clearVendorPrice(db, itemId)
+            ? `${describeItem(db, itemId)}: vendor price cleared (back to AH-priced)`
+            : `${describeItem(db, itemId)}: had no vendor price`,
+        );
+      }
+    } else if (group === "vendor" && action === "list") {
+      const prices = [...getVendorPrices(db)].sort((a, b) => a[0] - b[0]);
+      if (prices.length === 0) console.log("No vendor prices set.");
+      for (const [itemId, copper] of prices) console.log(`${formatGold(copper).padStart(10)} each  ${describeItem(db, itemId)}`);
+    } else if (group === "sale" && action === "mark") {
+      if (rest.length === 0) throw new ValidationError('usage: sale mark "<item>" [--note "<text>"]');
+      const itemId = resolveItem(db, rest.join(" "));
+      markSaleItem(db, itemId, values.note);
+      console.log(`${describeItem(db, itemId)}: marked as a sale item${values.note ? ` (${values.note})` : ""}`);
+    } else if (group === "sale" && action === "unmark") {
+      if (rest.length === 0) throw new ValidationError("usage: sale unmark <item> [<item> ...]");
+      for (const raw of rest) {
+        const itemId = resolveItem(db, raw);
+        console.log(unmarkSaleItem(db, itemId) ? `${describeItem(db, itemId)}: unmarked` : `${describeItem(db, itemId)}: was not marked`);
+      }
+    } else if (group === "sale" && action === "list") {
+      const items = listSaleItems(db);
+      if (items.length === 0) console.log("No sale items marked.");
+      for (const s of items) console.log(`${describeItem(db, s.itemId)}${s.note ? `  (${s.note})` : ""}`);
     } else if (group === "chain") {
       const all = listOperations(db).map((o) => resolveOperation(db, o.operationId));
       let rootId: number | null;

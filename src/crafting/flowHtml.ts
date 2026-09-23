@@ -6,6 +6,7 @@ import { CHEAP_AT, DEAR_AT, MIN_SPAN_HOURS, MIN_TREND_SAMPLES, TREND_WINDOW_DAYS
 import { formatGold } from "./money.js";
 import type { ResolvedOperation } from "./operations.js";
 import { unitCostOf, type ProcureNode } from "./procure.js";
+import { buildProcureFlowGraph, type ProcureFlowGraph } from "./procureFlow.js";
 import { describeVerdict, type ItemVerdict } from "./verdict.js";
 import type { GemSourcing, SourcingAnalysis } from "./sourcing.js";
 
@@ -60,6 +61,18 @@ export const CRAFTING_CSS = `
   .badge.typical { background: #88888833; color: #666; }
   .badge.collecting, .badge.few { background: #f59e0b33; color: #b45309; }
   .chain-tables > div { flex: 1 1 320px; }
+  .sale-cards { display: flex; flex-wrap: wrap; gap: 1rem; margin: 0.8rem 0 0.4rem; }
+  .sale-card { flex: 1 1 260px; border: 1px solid var(--line); border-radius: 10px; padding: 0.7rem 0.9rem; }
+  .sale-card summary { cursor: pointer; }
+  .sale-card summary::marker { color: var(--muted); }
+  .sale-card-name { font-weight: 600; margin-bottom: 0.3rem; display: inline-block; }
+  .sale-card-earned { margin-bottom: 0.4rem; }
+  .sale-card-earned .value { font-size: 1.5em; font-weight: 700; }
+  .sale-card .label { display: block; font-size: 0.75em; color: var(--muted); }
+  .sale-card .value { display: block; font-size: 1em; font-weight: 600; }
+  .sale-card-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem 0.8rem; margin-bottom: 0.4rem; }
+  .sale-card-detail { margin-top: 0.7rem; padding-top: 0.6rem; border-top: 1px solid var(--line); }
+  .sale-card-detail .flow { margin: 0.4rem 0 0; }
 `;
 
 function badge(flag: string): string {
@@ -266,7 +279,10 @@ function procureNodeHtml(node: ProcureNode, nameOf: (id: number) => string): str
   }
   const c = node.chosen;
   const unit = unitCostOf(node);
-  const via = c.strategy === "BUY" ? "buy on the auction house" : `${c.strategy.toLowerCase()} via ${esc(c.via)}${c.executions ? ` (${units(fractionToNumber(c.executions))} times)` : ""}`;
+  const via =
+    c.strategy === "BUY"
+      ? c.via === "a vendor" ? "buy from a vendor" : "buy on the auction house"
+      : `${c.strategy.toLowerCase()} via ${esc(c.via)}${c.executions ? ` (${units(fractionToNumber(c.executions))} times)` : ""}`;
   const others = node.options
     .filter((o) => o !== c)
     .map((o) => `${o.strategy === "BUY" ? "buy" : esc(o.via)} ${o.cost === null ? `<em>${esc(o.note ?? "unknown")}</em>` : formatGold(o.cost)}`)
@@ -463,6 +479,72 @@ function trendSection(model: CraftingTabModel, now: Date): string {
   );
 }
 
+function procureFlowNodeHtml(n: ProcureFlowGraph["nodes"][number]): string {
+  return `<div class="flow-node${n.kind === "operation" ? " op" : ""}${n.unknown ? " ignored" : ""}"><div class="title">${esc(n.label)}</div><div class="muted">${esc(n.sub)}</div></div>`;
+}
+
+/** The procure() tree, drawn as columns of boxes with arrows between them (see flow.ts's layerNodes). */
+function procureFlowDiagram(graph: ProcureFlowGraph): string {
+  if (graph.nodes.length <= 1) return `<p class="muted">Bought directly &ndash; nothing to craft.</p>`;
+  const columnOf = layerNodes(graph);
+  const columns = new Map<number, ProcureFlowGraph["nodes"]>();
+  for (const n of graph.nodes) {
+    const c = columnOf.get(n.id) ?? 0;
+    columns.set(c, [...(columns.get(c) ?? []), n]);
+  }
+  const flow = [...columns.keys()]
+    .sort((a, b) => a - b)
+    .map((c) => `<div class="flow-col">${columns.get(c)!.map(procureFlowNodeHtml).join("")}</div>`)
+    .join(`<div class="flow-arrow">&rarr;</div>`);
+  return `<div class="flow">${flow}</div>`;
+}
+
+function saleCardHtml(c: CraftingTabModel["saleItemCards"][number], now: Date, nameOf: (itemId: number) => string): string {
+  const last = c.lastSale
+    ? `Last sold ${ageText(c.lastSale.at.toISOString(), now)} on ${esc(c.lastSale.realmName)}`
+    : `Never sold yet`;
+  const avg = c.avgSellPriceCopper === null ? `<span class="muted">never sold</span>` : formatGold(c.avgSellPriceCopper);
+  const cost =
+    c.currentCostCopper === null
+      ? `<span class="warn" title="${esc(c.costNote ?? "unknown")}">unknown</span>`
+      : formatGold(c.currentCostCopper);
+  const profit =
+    c.expectedProfitCopper === null
+      ? `<span class="muted" title="needs both an average sell price and a known cost">unknown</span>`
+      : signed(c.expectedProfitCopper);
+  const stock =
+    c.stock === null
+      ? `<span class="muted" title="no stock data supplied to the report">not tracked</span>`
+      : `${c.stock.clustersWithStock}/${c.stock.totalClusters}`;
+  const diagram = procureFlowDiagram(buildProcureFlowGraph(c.procureResult, nameOf));
+  return (
+    `<details class="sale-card"><summary><div class="sale-card-name">${esc(c.name)}</div>` +
+    `<div class="sale-card-earned"><span class="label">Total earned</span><span class="value">${formatGold(c.totalEarnedCopper)}</span></div>` +
+    `<div class="sale-card-stats">` +
+    `<div><span class="label">Units sold</span><span class="value">${c.unitsSold.toLocaleString("en-US")}</span></div>` +
+    `<div><span class="label">Avg sell price</span><span class="value">${avg}</span></div>` +
+    `<div><span class="label">Current cost</span><span class="value">${cost}</span></div>` +
+    `<div><span class="label">Expected profit</span><span class="value">${profit}</span></div>` +
+    `<div><span class="label" title="Realm clusters with any known stock of this, out of all your roster's clusters - binary per cluster, not a status.">Stock</span><span class="value">${stock}</span></div>` +
+    `</div><div class="muted">${esc(last)}</div></summary>` +
+    `<div class="sale-card-detail"><p class="muted">Cheapest known way to make one right now:</p>${diagram}</div>` +
+    `</details>`
+  );
+}
+
+/** Your product line, one card per item marked with `sale mark` - sales history plus current crafting cost. Click a card to see its best crafting sequence. */
+function saleItemCardsSection(model: CraftingTabModel, now: Date): string {
+  if (model.saleItemCards.length === 0) return "";
+  const nameOf = (itemId: number) => model.itemNames.get(itemId) ?? String(itemId);
+  return (
+    `<h3>Your products</h3>` +
+    `<p class="muted">Click a card to see the cheapest known way to make one right now.</p>` +
+    `<div class="sale-cards">${model.saleItemCards.map((c) => saleCardHtml(c, now, nameOf)).join("")}</div>` +
+    `<p class="muted">Expected profit = average sell price &minus; current crafting cost (buy or make, whichever is cheaper right now). ` +
+    `Current selling price on the AH is not shown yet - these two figures come from your own sale history and the crafting cost model, not a live listing.</p>`
+  );
+}
+
 export function craftingTabHtml(model: CraftingTabModel, now: Date = model.generatedAt): string {
   if (model.economics.length === 0) {
     return `<h2>Crafting</h2><p class="muted">No operations defined yet. Add one with <code>npm run crafting -- op add ...</code>.</p>`;
@@ -520,6 +602,7 @@ export function craftingTabHtml(model: CraftingTabModel, now: Date = model.gener
   return `<h2>Crafting <span class="private">local only &mdash; from your own prospecting data</span></h2>
   <p class="muted">${sourceText} ${model.chain ? `The first operation is sized for ${units(model.executions)} executions; each further step for what that gives it to work on.` : `Sized for ${units(model.executions)} executions of each operation.`}</p>
   ${errorText}
+  ${saleItemCardsSection(model, now)}
   ${chainSection(model)}
   ${trendSection(model, now)}
   ${summaryTable(model)}
