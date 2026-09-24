@@ -134,4 +134,25 @@ describe("buildSaleItemCards", () => {
     // UNMADE has no observations at all - still 0 of the same 2 total roster clusters, not null.
     assert.deepEqual(cards.find((c) => c.itemId === UNMADE)!.stock, { clustersWithStock: 0, totalClusters: 2 });
   });
+
+  it("sales per week: units over the weeks since the first sale, never less than a one-week window", () => {
+    const { db, operations } = world();
+    const now = new Date("2026-09-29T00:00:00.000Z");
+    const sales: SaleRecordForCards[] = [
+      sale({ quantity: 2, capturedAt: new Date("2026-09-01T00:00:00.000Z") }), // 4 weeks before now
+      sale({ quantity: 2, capturedAt: new Date("2026-09-20T00:00:00.000Z") }),
+      sale({ itemName: "Unmade Thing", quantity: 3, capturedAt: new Date("2026-09-28T00:00:00.000Z") }), // 1 day ago
+    ];
+    const cards = buildSaleItemCards({ db, operations, books: new Map(), sales, now });
+    assert.equal(cards.find((c) => c.itemId === VIAL)!.unitsPerWeek, 4 / 4); // 4 units over 28 days
+    assert.equal(cards.find((c) => c.itemId === UNMADE)!.unitsPerWeek, 3); // one-week minimum, not 3 units / 1 day
+    assert.equal(cards.find((c) => c.itemId === UNMADE)!.salesSpanDays, 1); // the raw span is kept so the report can say how little data it is
+    assert.equal(cards.find((c) => c.itemId === VIAL)!.salesSpanDays, 28);
+  });
+
+  it("sales per week is null for an item never sold", () => {
+    const { db, operations } = world();
+    const cards = buildSaleItemCards({ db, operations, books: new Map(), sales: [] });
+    assert.equal(cards.find((c) => c.itemId === VIAL)!.unitsPerWeek, null);
+  });
 });
