@@ -161,7 +161,7 @@ export async function buildCraftingModel(args: {
       }
     }
   }
-  const saleItemCards = buildSaleItemCards({ db, operations, books: prices.books, sales: args.sales ?? [], stock: args.stock });
+  const saleItemCards = buildSaleItemCards({ db, operations, books: prices.books, sales: args.sales ?? [], stock: args.stock, now });
 
   return {
     generatedAt: now,

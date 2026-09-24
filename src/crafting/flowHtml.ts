@@ -512,6 +512,10 @@ function saleCardHtml(c: CraftingTabModel["saleItemCards"][number], now: Date, n
     c.expectedProfitCopper === null
       ? `<span class="muted" title="needs both an average sell price and a known cost">unknown</span>`
       : signed(c.expectedProfitCopper);
+  const perWeek =
+    c.unitsPerWeek === null
+      ? `<span class="muted">never sold</span>`
+      : `${(Math.round(c.unitsPerWeek * 10) / 10).toLocaleString("en-US")}${c.salesSpanDays !== null && c.salesSpanDays < 7 ? ` <span class="muted">(only ${Math.max(1, Math.round(c.salesSpanDays))}d of data)</span>` : ""}`;
   const stock =
     c.stock === null
       ? `<span class="muted" title="no stock data supplied to the report">not tracked</span>`
@@ -522,6 +526,7 @@ function saleCardHtml(c: CraftingTabModel["saleItemCards"][number], now: Date, n
     `<div class="sale-card-earned"><span class="label">Total earned</span><span class="value">${formatGold(c.totalEarnedCopper)}</span></div>` +
     `<div class="sale-card-stats">` +
     `<div><span class="label">Units sold</span><span class="value">${c.unitsSold.toLocaleString("en-US")}</span></div>` +
+    `<div><span class="label" title="Units sold divided by the weeks since your first recorded sale of it (counted as at least one week, so a single recent sale is not blown up).">Sold / week</span><span class="value">${perWeek}</span></div>` +
     `<div><span class="label">Avg sell price</span><span class="value">${avg}</span></div>` +
     `<div><span class="label">Current cost</span><span class="value">${cost}</span></div>` +
     `<div><span class="label">Expected profit</span><span class="value">${profit}</span></div>` +

@@ -1110,6 +1110,16 @@ eftersom.]
       kollapsa) verifierades ALDRIG visuellt i en riktig webbläsare — bara
       den genererade HTML-strukturen (giltig `<details>`/`<summary>`,
       ingen JS inblandad, så risken är låg, men opröv innan du litar på det).
+    - **"Sold / week" på sale item-korten (byggt 2026-09-24)**: sålda enheter
+      delat på veckorna sedan itemets FÖRSTA registrerade sälj (`captured_at`),
+      men aldrig kortare fönster än en vecka — annars blir ett enda sälj
+      igår "7 i veckan". Är det under en vecka data visas "(only Nd of data)"
+      intill siffran så den inte läses som en trend. Simons val: alla
+      permanenta säljitems säljs i alla 81 realmer, så en enda hastighetssiffra
+      per item är rätt mått (inte per realm). Enkel medvetet: fönstret börjar
+      vid itemets första sälj, inte vid när spårningen började, så ett item
+      som legat osålt länge före sitt första sälj visas inte som "långsamt".
+      `unitsPerWeek` + `salesSpanDays` i `saleItemCards.ts`, `now` skickas in.
     - **Lagerstatus på sale item-korten, "x/81", byggt 2026-09-23**: en till
       rad per kort — binär täckning, INTE samma nyanserade OUT/LOW/UNKNOWN/OK
       som stock-sektionen (#15) redan visar. `x` = antal av Simons

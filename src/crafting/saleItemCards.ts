@@ -39,6 +39,10 @@ export interface SaleItemCard {
   /** totalEarnedCopper / unitsSold, rounded; null if never sold. */
   avgSellPriceCopper: number | null;
   lastSale: { at: Date; realmName: string } | null;
+  /** Units sold per week since the first recorded sale of it (window at least one week, so one recent sale is not blown up); null if never sold. */
+  unitsPerWeek: number | null;
+  /** Days from the first recorded sale to now (the raw span behind unitsPerWeek, before the one-week minimum); null if never sold. */
+  salesSpanDays: number | null;
   /** Cheapest known way to end up with one right now (buy or craft); null if unknown. */
   currentCostCopper: number | null;
   /** Why the cost is unknown, when it is. */
@@ -57,6 +61,8 @@ export interface StockInputsForCards {
   connectedRealms: readonly { id: number; names: string[] }[];
   now: Date;
 }
+
+const WEEK_MS = 7 * 24 * 3600 * 1000;
 
 const normalizeItemName = (name: string) => name.trim().replace(/\s+/g, " ").toLowerCase();
 
@@ -78,8 +84,11 @@ export function buildSaleItemCards(args: {
   sales: readonly SaleRecordForCards[];
   /** Omit when there is no stock data to offer; every card's `stock` is then null. */
   stock?: StockInputsForCards;
+  /** The moment the sales rate is measured up to; defaults to the current time. */
+  now?: Date;
 }): SaleItemCard[] {
   const { db, operations, books, sales, stock } = args;
+  const nowMs = (args.now ?? new Date()).getTime();
   const items = listSaleItems(db).map((s) => ({ itemId: s.itemId, name: getItemName(db, s.itemId) ?? String(s.itemId) }));
   const idsWithName = new Set(items.map((i) => i.itemId));
   const byNormalizedName = new Map(items.map((i) => [normalizeItemName(i.name), i.itemId]));
@@ -88,8 +97,9 @@ export function buildSaleItemCards(args: {
     units: number;
     net: number;
     last: { at: Date; realmName: string } | null;
+    firstAtMs: number | null;
   }
-  const acc = new Map<number, Acc>(items.map((i) => [i.itemId, { units: 0, net: 0, last: null }]));
+  const acc = new Map<number, Acc>(items.map((i) => [i.itemId, { units: 0, net: 0, last: null, firstAtMs: null }]));
 
   for (const s of sales) {
     const matchedId = s.itemId !== null && idsWithName.has(s.itemId) ? s.itemId : findBySuffixMatch(byNormalizedName, s.itemName);
@@ -98,11 +108,15 @@ export function buildSaleItemCards(args: {
     a.units += s.quantity;
     a.net += s.netCopper;
     if (!a.last || s.capturedAt.getTime() > a.last.at.getTime()) a.last = { at: s.capturedAt, realmName: s.realmName };
+    if (a.firstAtMs === null || s.capturedAt.getTime() < a.firstAtMs) a.firstAtMs = s.capturedAt.getTime();
   }
 
   return items.map((item) => {
     const a = acc.get(item.itemId)!;
     const avgSellPriceCopper = a.units > 0 ? Math.round(a.net / a.units) : null;
+    const weeks = a.firstAtMs === null ? null : Math.max(1, (nowMs - a.firstAtMs) / WEEK_MS);
+    const unitsPerWeek = weeks === null ? null : a.units / weeks;
+    const salesSpanDays = a.firstAtMs === null ? null : Math.max(0, (nowMs - a.firstAtMs) / (24 * 3600 * 1000));
 
     const procureResult = procure({ itemId: item.itemId, quantity: 1, operations, books });
     const node = procureResult.root;
@@ -119,6 +133,8 @@ export function buildSaleItemCards(args: {
       totalEarnedCopper: a.net,
       avgSellPriceCopper,
       lastSale: a.last,
+      unitsPerWeek,
+      salesSpanDays,
       currentCostCopper,
       costNote,
       expectedProfitCopper,
