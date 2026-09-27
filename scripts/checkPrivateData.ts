@@ -46,6 +46,10 @@ const FORBIDDEN_PATH_PATTERNS: RegExp[] = [
   /^reports-private\//,
   /^data-private\//,
   /^config\/earningsAccounts\.local\.json$/,
+  // An actual WoW SavedVariables file (a real player's data), wherever it
+  // sits in the tree - not just under WTF\Account, in case one gets copied
+  // somewhere else first.
+  /[\\/]SavedVariables[\\/].*\.lua$/i,
 ];
 
 // Generic, repo-independent - these don't need the local denylist to catch.
@@ -59,7 +63,16 @@ const GENERIC_PATTERNS: { label: string; re: RegExp }[] = [
     // by an actual folder name.
     re: /WTF[\\/]Account[\\/](?!REPLACE_WITH_|<|\.\.\.|…|[`'")]|\s|$)\S+/,
   },
-  { label: "a committed SavedVariables file", re: /SavedVariables[\\/][^\s"']+\.lua/ },
+  // Deliberately no free-text "mentions a SavedVariables file" pattern:
+  // "SavedVariables/WowAHTracker.lua" alone is a constant, non-sensitive
+  // filename (the same on every install; already used unredacted all over
+  // this repo, e.g. scripts/ingestSavedVariables.ts's SAVED_VARIABLES_FILE
+  // and CLAUDE.md). The actually sensitive case - a real account folder in
+  // the path - is caught by the WTF\Account pattern above; an actually
+  // *committed* SavedVariables file (not just a text mention of the name)
+  // is caught by FORBIDDEN_PATH_PATTERNS. Tried a free-text version of this
+  // and reverted it 2026-09-28: it fired on a commit message that only
+  // ever mentioned the filename, never contained a real path.
 ];
 
 interface Hit {
@@ -109,10 +122,23 @@ function loadDenylistTerms(): string[] {
   return [...terms];
 }
 
-/** Whole-"word" match: not preceded/followed by a letter, digit or apostrophe. Case-insensitive. */
-function findTermHits(text: string, term: string): boolean {
+/**
+ * Whole-"word" match: not preceded/followed by a letter or digit. Case-insensitive.
+ *
+ * Deliberately does NOT treat an apostrophe as continuing the word on either
+ * side of the match: a term like "Anub'arak" still matches correctly because
+ * its own internal apostrophe is part of the literal (escaped) match text,
+ * not part of this boundary check. Bug found and fixed 2026-09-28: an
+ * earlier version DID exclude apostrophe here "for compound names," which
+ * was never needed for that reason and had a real cost - it also made a
+ * possessive (e.g. "Someaccount's") continue the word, so the term
+ * "Someaccount" silently failed to match inside "Someaccount's export".
+ * Found by manually re-checking a commit the deep review had already
+ * flagged, which this script reported as clean.
+ */
+export function findTermHits(text: string, term: string): boolean {
   const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(`(?<![\\p{L}\\p{N}'])${escaped}(?![\\p{L}\\p{N}'])`, "iu");
+  const re = new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, "iu");
   return re.test(text);
 }
 
@@ -274,4 +300,13 @@ function main(): void {
   }
 }
 
-main();
+// Only run when executed directly (as the git hook or via npx tsx), never on
+// import - scripts/checkPrivateData.test.ts imports findTermHits from this
+// file, and without this guard that import alone would trigger a full CLI
+// run, including a blocking read of stdin (default pre-push protocol mode),
+// which hangs the test runner forever (found the hard way: a supposedly-fast
+// test run hung until manually killed).
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+if (isMain) {
+  main();
+}
