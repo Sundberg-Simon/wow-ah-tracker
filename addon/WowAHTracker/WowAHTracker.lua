@@ -105,6 +105,39 @@ local function buildItemLine(itemId, item, myConnectedRealmId, prices, ilvl)
 	return line
 end
 
+-- deep-review-2026-09-26.md finding S2: nothing previously noticed if the
+-- sync or the fetch job silently stopped - Fetch-DataLua.ps1 logged "OK" for
+-- any successfully-downloaded file regardless of age, and this addon printed
+-- prices without saying how old they were. generatedAt (scripts/report.ts) is
+-- UTC ISO 8601 ("...Z"); time() built from a manually-constructed table is
+-- treated as LOCAL by WoW's Lua, so this is off by Simon's local UTC offset
+-- (an hour or two, CET/CEST) - fine for a "is this stale by 12+ hours" check,
+-- not a precise clock.
+local function generatedAtAgeHours()
+	if not WowAhTrackerData or not WowAhTrackerData.generatedAt then
+		return nil
+	end
+	local y, mo, d, h, mi, s = WowAhTrackerData.generatedAt:match("(%d+)-(%d+)-(%d+)T(%d+):(%d+):(%d+)")
+	if not y then
+		return nil
+	end
+	local generatedTime = time({
+		year = tonumber(y),
+		month = tonumber(mo),
+		day = tonumber(d),
+		hour = tonumber(h),
+		min = tonumber(mi),
+		sec = tonumber(s),
+	})
+	local ageSeconds = time() - generatedTime
+	if ageSeconds < 0 then
+		return 0
+	end
+	return ageSeconds / 3600
+end
+
+local STALE_DATA_HOURS = 12
+
 local function buildSummaryLines()
 	local lines = {}
 
@@ -115,6 +148,19 @@ local function buildSummaryLines()
 		)
 		return lines
 	end
+
+	local ageHours = generatedAtAgeHours()
+	if ageHours and ageHours >= STALE_DATA_HOURS then
+		table.insert(
+			lines,
+			string.format(
+				"|cffff5555STALE:|r data is ~%dh old (generated %s) - check the scheduled Windows fetch job and the sync.",
+				math.floor(ageHours),
+				WowAhTrackerData.generatedAt
+			)
+		)
+	end
+
 	if not WowAhTrackerData.items or next(WowAhTrackerData.items) == nil then
 		table.insert(lines, "Data file loaded but has no tracked items.")
 		return lines

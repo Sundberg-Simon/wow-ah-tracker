@@ -105,6 +105,20 @@ eftersom.]
    själva uppslaget). En körning som startar men kraschar lämnas som
    `success = false` så nästa tick får försöka igen utan att vänta ut
    hela 55-minutersfönstret.
+   **Drift-varning (deep-review-2026-09-26.md, fynd S2)**: GitHub
+   stänger automatiskt av `schedule`-triggers i publika repon efter
+   60 dagar utan repo-aktivitet — `health.yml` ligger i samma repo och
+   slås av samtidigt, så den slutar då larma helt tyst istället för att
+   gå röd. Om det gått ~50 dagar sedan senaste push: slå på workflow:en
+   igen manuellt (Actions → workflowen → "Enable workflow") eller gör
+   valfri commit. Om GitHub mejlar ägaren innan avstängning är INTE
+   verifierat. Lokalt håll: `Fetch-DataLua.ps1` (var 15:e minut medan
+   Simon är inloggad) och addonets inloggnings-sammanfattning loggar
+   nu båda "STALE" om `generatedAt` är mer än 12h gammal — det täcker
+   även 60-dagarsfallet (generatedAt slutar helt enkelt bli nyare,
+   samma symptom som vilken annan stillastående sync som helst), men
+   bara som larm: Simon måste själv slå på workflow:en igen manuellt,
+   ingen lokal körning kan göra det åt honom.
 8. **Repot är publikt.** Konsekvens av #7: med privat repo och */15-cron
    spricker GitHub Actions gratiskvoten (2000 min/månad) inom ~2-3
    veckor. Bekräftat säkert innan beslutet togs: `git log --all
