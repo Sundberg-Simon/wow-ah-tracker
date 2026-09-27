@@ -1,0 +1,12 @@
+#!/bin/sh
+# Personal-data guard (deep-review-2026-09-26.md, finding S1). Enable once
+# per clone with:
+#   git config core.hooksPath .githooks
+#
+# git invokes this with the pre-push protocol on stdin: lines of
+#   "<local ref> <local sha1> <remote ref> <remote sha1>"
+# scripts/checkPrivateData.ts reads that itself; this wrapper just makes sure
+# it runs with the repo root as cwd and blocks the push on a non-zero exit.
+set -e
+cd "$(git rev-parse --show-toplevel)"
+exec npx tsx scripts/checkPrivateData.ts

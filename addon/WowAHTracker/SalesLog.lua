@@ -68,7 +68,7 @@
 -- the second. CONFIRMED root cause, from inspecting Simon's actual
 -- duplicated saved-variables rows directly (not just reasoned from source):
 -- every field in each duplicate pair was byte-identical except `buyer` -
--- "" in the first occurrence, the real buyer name ("Vallik") in the
+-- "" in the first occurrence, the buyer's real name in the
 -- second. GetInboxInvoiceInfo's playerName evidently resolves
 -- asynchronously for a buyer the client doesn't already have cached (blank
 -- on an early read, populated once the name arrives), and the old

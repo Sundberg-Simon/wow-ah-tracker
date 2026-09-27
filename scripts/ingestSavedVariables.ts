@@ -24,13 +24,23 @@
  *     afterwards.
  *   - WoW only writes SavedVariables on logout or /reload, so the file can lag
  *     the live game; this only ever reads it.
+ *
+ * Also regenerates data-private/private-terms.txt (gitignored) on every run,
+ * dry-run included: the deny-list the pre-push hook
+ * (scripts/checkPrivateData.ts, deep-review-2026-09-26.md finding S1) scans
+ * commits for, built from exactly the names this script already has in memory
+ * from the local SavedVariables files. Never written to the DB or committed.
  */
-import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync, statSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { pool } from "../src/db/pool.js";
 import { EARNINGS_ACCOUNTS, accountLabel } from "../config/earningsAccounts.js";
 import { ingestAccount, type AccountInput } from "../src/earnings/ingest.js";
 import { extractAccountData, parseSavedVariables } from "../src/earnings/savedVariables.js";
+import { collectPrivateTerms, formatPrivateTermsFile } from "../src/privacy/privateTerms.js";
+
+const PRIVATE_TERMS_PATH = fileURLToPath(new URL("../data-private/private-terms.txt", import.meta.url));
 
 const DEFAULT_WTF_DIR = "C:\\Program Files (x86)\\World of Warcraft\\_retail_\\WTF\\Account";
 const SAVED_VARIABLES_FILE = "WowAHTracker.lua";
@@ -85,6 +95,11 @@ async function main() {
       console.warn(`  WARNING: ${missingRealmOrCharacter} record(s) have no realm/character - ingested, but unclassifiable.`);
     }
   }
+
+  const terms = collectPrivateTerms(accounts, EARNINGS_ACCOUNTS);
+  mkdirSync(path.dirname(PRIVATE_TERMS_PATH), { recursive: true });
+  writeFileSync(PRIVATE_TERMS_PATH, formatPrivateTermsFile(terms));
+  console.log(`Wrote ${terms.length} private term(s) to ${PRIVATE_TERMS_PATH} (used by the pre-push guard).`);
 
   if (dryRun) {
     return;

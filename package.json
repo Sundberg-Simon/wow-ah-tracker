@@ -18,7 +18,8 @@
     "crafting": "tsx scripts/crafting.ts",
     "test:crafting": "node --import tsx --test src/crafting/*.test.ts",
     "test:sync": "node --import tsx --test src/sync/*.test.ts",
-    "test:earnings": "node --import tsx --test src/earnings/*.test.ts"
+    "test:earnings": "node --import tsx --test src/earnings/*.test.ts",
+    "test:privacy": "node --import tsx --test src/privacy/*.test.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
