@@ -17,6 +17,11 @@ function gcd(a: number, b: number): number {
   return a;
 }
 
+function gcdBig(a: bigint, b: bigint): bigint {
+  while (b !== 0n) [a, b] = [b, a % b];
+  return a;
+}
+
 export function fraction(num: number, den: number): Fraction {
   if (!Number.isSafeInteger(num) || !Number.isSafeInteger(den)) {
     throw new RangeError(`Fraction needs safe integers, got ${num}/${den}`);
@@ -26,14 +31,34 @@ export function fraction(num: number, den: number): Fraction {
   return { num: num / g, den: den / g };
 }
 
+/**
+ * Reduces a numerator/denominator pair that may be far too big to fit a safe
+ * integer BEFORE reduction (e.g. the unreduced cross-product of two
+ * fractions' denominators), using BigInt so that intermediate overflow never
+ * happens. Only the final, reduced value has to fit a safe integer - and for
+ * real yield ratios (which share large common factors) it almost always
+ * does, even when the unreduced product wildly overflows. Bug found
+ * 2026-09-28: `addFractions`/`subFractions`/etc. used to reduce via
+ * `fraction()` AFTER computing unreduced cross-products with plain `number`
+ * multiplication, so a long chain of combined fractions at a large scale
+ * (`chain --ore <a lot>`) could throw on an intermediate value that would
+ * have reduced down to something perfectly ordinary.
+ */
+function reduceBig(numBig: bigint, denBig: bigint): Fraction {
+  if (denBig <= 0n) throw new RangeError(`Fraction denominator must be > 0, got ${denBig}`);
+  const g = gcdBig(numBig < 0n ? -numBig : numBig, denBig) || 1n; // gcd(0, den) = den
+  const num = numBig / g;
+  const den = denBig / g;
+  if (num > BigInt(Number.MAX_SAFE_INTEGER) || num < -BigInt(Number.MAX_SAFE_INTEGER) || den > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new RangeError(`Fraction overflow: ${numBig}/${denBig} reduces to ${num}/${den}, which still doesn't fit a safe integer`);
+  }
+  return { num: Number(num), den: Number(den) };
+}
+
 /** Multiply by an integer, e.g. yield-per-ore x ores in a cast. */
 export function scaleFraction(f: Fraction, k: number): Fraction {
   if (!Number.isSafeInteger(k)) throw new RangeError(`Scale factor must be a safe integer, got ${k}`);
-  const num = f.num * k;
-  if (!Number.isSafeInteger(num)) {
-    throw new RangeError(`Fraction overflow scaling ${f.num}/${f.den} by ${k}`);
-  }
-  return fraction(num, f.den);
+  return reduceBig(BigInt(f.num) * BigInt(k), BigInt(f.den));
 }
 
 /** For display only - never feed the result back into currency math. */
@@ -43,26 +68,24 @@ export function fractionToNumber(f: Fraction): number {
 
 export const ZERO: Fraction = { num: 0, den: 1 };
 
-function safeProduct(a: number, b: number): number {
-  const p = a * b;
-  if (!Number.isSafeInteger(p)) throw new RangeError(`Fraction overflow multiplying ${a} x ${b}`);
-  return p;
-}
-
 export function addFractions(a: Fraction, b: Fraction): Fraction {
-  return fraction(safeProduct(a.num, b.den) + safeProduct(b.num, a.den), safeProduct(a.den, b.den));
+  const an = BigInt(a.num), ad = BigInt(a.den), bn = BigInt(b.num), bd = BigInt(b.den);
+  return reduceBig(an * bd + bn * ad, ad * bd);
 }
 
 /** a - b; the result may be negative. */
 export function subFractions(a: Fraction, b: Fraction): Fraction {
-  return fraction(safeProduct(a.num, b.den) - safeProduct(b.num, a.den), safeProduct(a.den, b.den));
+  const an = BigInt(a.num), ad = BigInt(a.den), bn = BigInt(b.num), bd = BigInt(b.den);
+  return reduceBig(an * bd - bn * ad, ad * bd);
 }
 
 export function mulFractions(a: Fraction, b: Fraction): Fraction {
-  return fraction(safeProduct(a.num, b.num), safeProduct(a.den, b.den));
+  return reduceBig(BigInt(a.num) * BigInt(b.num), BigInt(a.den) * BigInt(b.den));
 }
 
 /** Negative, zero or positive as a is less than, equal to or greater than b. */
 export function compareFractions(a: Fraction, b: Fraction): number {
-  return Math.sign(safeProduct(a.num, b.den) - safeProduct(b.num, a.den));
+  const lhs = BigInt(a.num) * BigInt(b.den);
+  const rhs = BigInt(b.num) * BigInt(a.den);
+  return lhs < rhs ? -1 : lhs > rhs ? 1 : 0;
 }
