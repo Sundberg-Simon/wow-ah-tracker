@@ -354,6 +354,34 @@ eftersom.]
       först vid logout eller `/reload` — filen ligger alltid efter spelet.
       Uppgiften registreras med `Register-EarningsTask.ps1` (kräver en
       UAC-höjning bara för registreringen, precis som `WowAhTrackerFetch`).
+    - **Konto med bara inköp (`purchasesOnly`, 2026-09-30)**: ett fjärde konto
+      köper det mesta av crafting-råvarorna men säljer bara på Simons
+      huvudrealm (utanför cross-realm-scope). Det står i
+      `earningsAccounts.local.json` med `"purchasesOnly": true`: ingest skriver
+      BARA dess inköp — aldrig sales, roster eller stock (rostern definierar
+      cross-realm/other och lagerkluster, så dess karaktärer får inte in där).
+      Vendor-köp (t.ex. Orb of Mystery) syns aldrig oavsett konto:
+      PurchaseLog läser bara AH-inköpsfakturor i posten.
+    - **`earnings_sales.source` + TSM-backfill (2026-09-30)**: `'addon'`
+      (default, vanlig ingest) eller `'tsm-backfill'`. Bakgrund: addonet var
+      avslaget på ett konto 2026-09-27–09-30 (bara Blizzard- och några få
+      addons laddades), så ett antal sales sågs aldrig — mailen är
+      redan hämtade och kan inte läsas om. `npm run backfill:tsm -- --account
+      <folder> --since <datum> [--apply]` (`scripts/backfillSalesFromTsm.ts`,
+      dry-run som standard) återvinner dem ur TSM:s `csvSales`, bara för
+      kontots rosterkaraktärer. Ett manuellt reparationsverktyg, INTE en
+      datakälla (regeln om att aldrig bygga capture på TSM:s interna data
+      gäller fortfarande) — därför validerar det först formatet mot sales
+      addonet faktiskt loggat (14 dagar före `--since`, ≥ 80 % måste matcha,
+      annars skrivs inget; första körningen: 31/31, brutto exakt på koppar för
+      alla matchade). TSM:s pris är per enhet EFTER 5 % AH-avgift och tiden är
+      beräknad säljtid; backfillade rader har därför `deposit_copper` NULL,
+      netto = efter avgift (några guld lågt), `captured_at` = säljtid.
+      Ingestens fil-mot-DB-avstämning räknar bara `source = 'addon'` (annars
+      varnade den för evigt att filen "tappat data"), och rapportens
+      "newest capture" per konto likaså (en backfill ska inte dölja att
+      addonet var av). Om ett konto slutar spara WowAHTracker.lua: kolla att
+      addonet är påslaget där (AddOns-menyn, "All characters").
     - **Låst lärdom (parsern)**: luaparse ger `StringLiteral.value = null`
       i standardläget (bara `raw` är satt) trots att typerna säger
       `string` — en naiv parse ger tyst `"null"` som nyckel överallt och

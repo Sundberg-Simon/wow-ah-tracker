@@ -138,6 +138,15 @@ CREATE TABLE IF NOT EXISTS earnings_sales (
 
 CREATE INDEX IF NOT EXISTS earnings_sales_captured_idx ON earnings_sales (captured_at);
 
+-- Where a sale row came from. 'addon' = the normal ingest of the addon's own
+-- sale log. 'tsm-backfill' = a sale the addon never saw (it was disabled on an
+-- account) recovered from TSM's accounting by scripts/backfillSalesFromTsm.ts;
+-- those rows have no deposit, net = price after the AH cut, and captured_at =
+-- TSM's estimated sale time rather than when the mail was opened. Ingest's
+-- file-vs-DB reconciliation only counts 'addon' rows, so backfilled rows never
+-- look like "the local file lost data".
+ALTER TABLE earnings_sales ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'addon';
+
 CREATE TABLE IF NOT EXISTS earnings_purchases (
   id BIGSERIAL PRIMARY KEY,
   account TEXT NOT NULL,

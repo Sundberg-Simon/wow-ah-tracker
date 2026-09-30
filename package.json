@@ -12,6 +12,7 @@
     "report": "tsx scripts/report.ts",
     "health": "tsx scripts/healthCheck.ts",
     "ingest": "tsx scripts/ingestSavedVariables.ts",
+    "backfill:tsm": "tsx scripts/backfillSalesFromTsm.ts",
     "report:earnings": "tsx scripts/reportEarnings.ts",
     "rollup": "tsx scripts/rollupSnapshots.ts",
     "typecheck": "tsc --noEmit",

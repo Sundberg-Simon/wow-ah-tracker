@@ -3,7 +3,7 @@
  * account's SavedVariables file into the Neon DB, for the local earnings
  * report (scripts/reportEarnings.ts).
  *
- *   npm run ingest                    # read the 3 accounts, write to the DB
+ *   npm run ingest                    # read the configured accounts, write to the DB
  *   npm run ingest -- --dry-run       # parse + summarize, write nothing
  *   npm run ingest -- --wtf-dir <p>   # override the WTF\Account directory
  *
@@ -35,7 +35,7 @@ import { readFileSync, readdirSync, statSync, existsSync, writeFileSync, mkdirSy
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { pool } from "../src/db/pool.js";
-import { EARNINGS_ACCOUNTS, accountLabel } from "../config/earningsAccounts.js";
+import { EARNINGS_ACCOUNTS, accountLabel, isPurchasesOnly } from "../config/earningsAccounts.js";
 import { ingestAccount, type AccountInput } from "../src/earnings/ingest.js";
 import { extractAccountData, parseSavedVariables } from "../src/earnings/savedVariables.js";
 import { collectPrivateTerms, formatPrivateTermsFile } from "../src/privacy/privateTerms.js";
@@ -76,7 +76,7 @@ function readAccounts(wtfDir: string): AccountInput[] {
       throw new Error(`Expected SavedVariables file missing for ${folder}: ${filePath}`);
     }
     const data = extractAccountData(parseSavedVariables(readFileSync(filePath)));
-    return { folder, label: accountLabel(folder), modifiedAt: statSync(filePath).mtime, data };
+    return { folder, label: accountLabel(folder), modifiedAt: statSync(filePath).mtime, data, purchasesOnly: isPurchasesOnly(folder) };
   });
 }
 
@@ -89,7 +89,8 @@ async function main() {
   for (const a of accounts) {
     const { sales, purchases, roster, missingRealmOrCharacter } = a.data;
     console.log(
-      `${a.label} (${a.folder}): ${sales.length} sales, ${purchases.length} purchases, ${roster.length} roster characters, ${a.data.stockObservations.length} stock observations; file last saved ${a.modifiedAt?.toLocaleString() ?? "?"}`,
+      `${a.label} (${a.folder}): ${sales.length} sales, ${purchases.length} purchases, ${roster.length} roster characters, ${a.data.stockObservations.length} stock observations; file last saved ${a.modifiedAt?.toLocaleString() ?? "?"}` +
+        (a.purchasesOnly ? "  [purchases only - sales, roster and stock are not ingested]" : ""),
     );
     if (missingRealmOrCharacter > 0) {
       console.warn(`  WARNING: ${missingRealmOrCharacter} record(s) have no realm/character - ingested, but unclassifiable.`);

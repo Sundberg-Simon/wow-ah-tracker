@@ -7,6 +7,8 @@ export interface AccountInput {
   label: string;
   modifiedAt: Date | null;
   data: ExtractedAccountData;
+  /** Only the purchase log is written; sales, roster and stock are ignored (see config/earningsAccounts.ts). */
+  purchasesOnly?: boolean;
 }
 
 export interface AccountResult {
@@ -21,7 +23,10 @@ export interface AccountResult {
 }
 
 async function countRows(client: pg.PoolClient, table: string, account: string): Promise<number> {
-  const r = await client.query(`SELECT count(*)::int AS n FROM ${table} WHERE account = $1`, [account]);
+  // Sales recovered from elsewhere (source <> 'addon', see schema.sql) were
+  // never in the local file, so they must not count against it.
+  const addonOnly = table === "earnings_sales" ? " AND source = 'addon'" : "";
+  const r = await client.query(`SELECT count(*)::int AS n FROM ${table} WHERE account = $1${addonOnly}`, [account]);
   return r.rows[0].n;
 }
 
@@ -33,7 +38,15 @@ async function countRows(client: pg.PoolClient, table: string, account: string):
  * represented in the DB afterwards.
  */
 export async function ingestAccount(client: pg.PoolClient, a: AccountInput): Promise<AccountResult> {
-  const { sales, purchases, roster } = a.data;
+  const { purchases } = a.data;
+  // A purchases-only account contributes nothing else: its sales are out of
+  // scope, and its characters must not enter the roster (cross-realm/other and
+  // stock clusters are defined by the roster) or the stock tables.
+  const sales = a.purchasesOnly ? [] : a.data.sales;
+  const roster = a.purchasesOnly ? [] : a.data.roster;
+  const stockObservations = a.purchasesOnly ? [] : a.data.stockObservations;
+  const stockHeld = a.purchasesOnly ? [] : a.data.stockHeld;
+  const stockWarnings = a.purchasesOnly ? [] : a.data.stockWarnings;
   const warnings: string[] = [];
 
   const salesBefore = await countRows(client, "earnings_sales", a.folder);
@@ -150,11 +163,11 @@ export async function ingestAccount(client: pg.PoolClient, a: AccountInput): Pro
 
   // Crafted-item stock (insert-only, idempotent). Warnings from the isolated
   // parse are surfaced but never fatal.
-  for (const w of a.data.stockWarnings) {
+  for (const w of stockWarnings) {
     warnings.push(w);
   }
   let stockInserted = 0;
-  if (a.data.stockObservations.length > 0) {
+  if (stockObservations.length > 0) {
     const r = await client.query(
       `INSERT INTO stock_observations (account, realm_name, character_name, source, item_id, quantity, observed_at)
        SELECT $1, x.realm_name, x.character_name, x.source, x.item_id, x.quantity, x.observed_at
@@ -164,7 +177,7 @@ export async function ingestAccount(client: pg.PoolClient, a: AccountInput): Pro
       [
         a.folder,
         JSON.stringify(
-          a.data.stockObservations.map((o) => ({
+          stockObservations.map((o) => ({
             realm_name: o.realmName,
             character_name: o.characterName,
             source: o.source,
@@ -186,7 +199,7 @@ export async function ingestAccount(client: pg.PoolClient, a: AccountInput): Pro
       [
         a.folder,
         JSON.stringify(
-          a.data.stockObservations.map((o) => ({
+          stockObservations.map((o) => ({
             realm_name: o.realmName,
             character_name: o.characterName,
             source: o.source,
@@ -196,13 +209,13 @@ export async function ingestAccount(client: pg.PoolClient, a: AccountInput): Pro
         ),
       ],
     );
-    if (check.rows[0].n !== a.data.stockObservations.length) {
+    if (check.rows[0].n !== stockObservations.length) {
       throw new Error(
-        `${a.label}: stock integrity check failed - ${check.rows[0].n} of ${a.data.stockObservations.length} observations are in the DB.`,
+        `${a.label}: stock integrity check failed - ${check.rows[0].n} of ${stockObservations.length} observations are in the DB.`,
       );
     }
   }
-  if (a.data.stockHeld.length > 0) {
+  if (stockHeld.length > 0) {
     await client.query(
       `INSERT INTO stock_held (account, realm_name, character_name, item_id)
        SELECT $1, x.realm_name, x.character_name, x.item_id
@@ -210,7 +223,7 @@ export async function ingestAccount(client: pg.PoolClient, a: AccountInput): Pro
        ON CONFLICT DO NOTHING`,
       [
         a.folder,
-        JSON.stringify(a.data.stockHeld.map((h) => ({ realm_name: h.realmName, character_name: h.characterName, item_id: h.itemId }))),
+        JSON.stringify(stockHeld.map((h) => ({ realm_name: h.realmName, character_name: h.characterName, item_id: h.itemId }))),
       ],
     );
   }

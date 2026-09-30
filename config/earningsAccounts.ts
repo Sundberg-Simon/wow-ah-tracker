@@ -16,6 +16,12 @@ import { fileURLToPath } from "node:url";
 export interface EarningsAccount {
   folder: string;
   label: string;
+  /**
+   * Ingest ONLY this account's purchase log - no sales, roster or stock. For an
+   * account that buys crafting mats but whose selling is outside the project's
+   * cross-realm scope (its sales must not count). Omitted = false.
+   */
+  purchasesOnly?: boolean;
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -32,14 +38,28 @@ function loadAccounts(): EarningsAccount[] {
   if (
     !Array.isArray(parsed) ||
     parsed.length === 0 ||
-    !parsed.every((a) => a && typeof a.folder === "string" && a.folder && typeof a.label === "string" && a.label)
+    !parsed.every(
+      (a) =>
+        a &&
+        typeof a.folder === "string" &&
+        a.folder &&
+        typeof a.label === "string" &&
+        a.label &&
+        (a.purchasesOnly === undefined || typeof a.purchasesOnly === "boolean"),
+    )
   ) {
-    throw new Error(`${LOCAL_CONFIG} must be a non-empty JSON array of { "folder": string, "label": string }.`);
+    throw new Error(
+      `${LOCAL_CONFIG} must be a non-empty JSON array of { "folder": string, "label": string, "purchasesOnly"?: boolean }.`,
+    );
   }
   return parsed as EarningsAccount[];
 }
 
 export const EARNINGS_ACCOUNTS: EarningsAccount[] = loadAccounts();
+
+export function isPurchasesOnly(folder: string): boolean {
+  return EARNINGS_ACCOUNTS.find((a) => a.folder === folder)?.purchasesOnly === true;
+}
 
 export function accountLabel(folder: string): string {
   return EARNINGS_ACCOUNTS.find((a) => a.folder === folder)?.label ?? folder;

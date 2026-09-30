@@ -100,9 +100,12 @@ async function loadInputs(now: Date) {
     ),
     pool.query(
       `SELECT account, count(*) FILTER (WHERE kind = 's')::int AS sales,
-              count(*) FILTER (WHERE kind = 'p')::int AS purchases, max(captured_at) AS newest
-       FROM (SELECT account, captured_at, 's' AS kind FROM earnings_sales
-             UNION ALL SELECT account, captured_at, 'p' FROM earnings_purchases) x GROUP BY account`,
+              count(*) FILTER (WHERE kind = 'p')::int AS purchases,
+              -- Freshness of the addon pipeline: a backfilled sale (source <> 'addon')
+              -- must not make an account whose addon was off look recently captured.
+              max(captured_at) FILTER (WHERE src = 'addon') AS newest
+       FROM (SELECT account, captured_at, 's' AS kind, source AS src FROM earnings_sales
+             UNION ALL SELECT account, captured_at, 'p', 'addon' FROM earnings_purchases) x GROUP BY account`,
     ),
     pool.query("SELECT account, realm_name, character_name, source, item_id, quantity, observed_at FROM stock_observations"),
     pool.query("SELECT realm_name, character_name, item_id FROM stock_held"),
