@@ -19,6 +19,7 @@ export interface AccountResult {
   purchasesAfter: number;
   purchasesInserted: number;
   stockInserted: number;
+  goldInserted: number;
   warnings: string[];
 }
 
@@ -228,6 +229,45 @@ export async function ingestAccount(client: pg.PoolClient, a: AccountInput): Pro
     );
   }
 
+  // Gold balances (insert-only, idempotent). For EVERY account, purchases-only
+  // included: it's still Simon's gold. Isolated like stock - warnings, never fatal.
+  for (const w of a.data.goldWarnings) {
+    warnings.push(w);
+  }
+  let goldInserted = 0;
+  const gold = a.data.goldObservations;
+  if (gold.length > 0) {
+    const goldJson = JSON.stringify(
+      gold.map((g) => ({
+        kind: g.kind,
+        source_key: g.sourceKey,
+        realm_name: g.realmName,
+        name: g.name,
+        observed_at: g.observedAt,
+        copper: g.copper,
+        ctx: g.ctx,
+      })),
+    );
+    const r = await client.query(
+      `INSERT INTO gold_observations (account, kind, source_key, realm_name, name, observed_at, copper, ctx)
+       SELECT $1, x.kind, x.source_key, x.realm_name, x.name, x.observed_at, x.copper, x.ctx
+       FROM jsonb_to_recordset($2::jsonb) AS x(
+         kind text, source_key text, realm_name text, name text, observed_at timestamptz, copper bigint, ctx text)
+       ON CONFLICT DO NOTHING`,
+      [a.folder, goldJson],
+    );
+    goldInserted = r.rowCount ?? 0;
+    const check = await client.query(
+      `SELECT count(*)::int AS n FROM jsonb_to_recordset($2::jsonb) AS x(kind text, source_key text, observed_at timestamptz)
+         JOIN gold_observations g
+           ON g.account = $1 AND g.kind = x.kind AND g.source_key = x.source_key AND g.observed_at = x.observed_at`,
+      [a.folder, goldJson],
+    );
+    if (check.rows[0].n !== gold.length) {
+      throw new Error(`${a.label}: gold integrity check failed - ${check.rows[0].n} of ${gold.length} samples are in the DB.`);
+    }
+  }
+
   const si = salesInserted.rowCount ?? 0;
   const pi = purchasesInserted.rowCount ?? 0;
 
@@ -238,5 +278,5 @@ export async function ingestAccount(client: pg.PoolClient, a: AccountInput): Pro
     [a.folder, a.modifiedAt, sales.length, purchases.length, si, pi],
   );
 
-  return { salesBefore, salesAfter, salesInserted: si, purchasesBefore, purchasesAfter, purchasesInserted: pi, stockInserted, warnings };
+  return { salesBefore, salesAfter, salesInserted: si, purchasesBefore, purchasesAfter, purchasesInserted: pi, stockInserted, goldInserted, warnings };
 }

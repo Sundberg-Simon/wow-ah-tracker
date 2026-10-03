@@ -123,7 +123,7 @@ async function main() {
       console.log(
         `  ${a.label}: sales ${r.salesBefore} -> ${r.salesAfter} in DB (+${r.salesInserted} new, ${a.data.sales.length} in file); ` +
           `purchases ${r.purchasesBefore} -> ${r.purchasesAfter} (+${r.purchasesInserted} new, ${a.data.purchases.length} in file); ` +
-          `stock observations +${r.stockInserted} new (${a.data.stockObservations.length} in file)`,
+          `stock observations +${r.stockInserted} new (${a.data.stockObservations.length} in file); gold samples +${r.goldInserted} new (${a.data.goldObservations.length} in file)`,
       );
     }
 

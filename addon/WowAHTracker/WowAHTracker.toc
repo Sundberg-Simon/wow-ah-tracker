@@ -3,7 +3,7 @@
 ## Notes: EU-wide price/quantity summary for a small tracked-item list, fed by an external sync pipeline - not a live AH scanner. See project README.
 ## Author: wow-ah-tracker
 ## Version: 0.1.0
-## SavedVariables: WowAHTrackerCategorizerDB, WowAHTrackerSalesDB, WowAHTrackerRealmRosterDB, WowAHTrackerPurchaseDB, WowAHTrackerStockDB
+## SavedVariables: WowAHTrackerCategorizerDB, WowAHTrackerSalesDB, WowAHTrackerRealmRosterDB, WowAHTrackerPurchaseDB, WowAHTrackerStockDB, WowAHTrackerGoldDB
 
 WowAHTracker.lua
 Categorizer.lua
@@ -11,4 +11,5 @@ SalesLog.lua
 PurchaseLog.lua
 RealmRoster.lua
 Stock.lua
+Gold.lua
 data.lua

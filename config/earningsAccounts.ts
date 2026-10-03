@@ -17,7 +17,7 @@ export interface EarningsAccount {
   folder: string;
   label: string;
   /**
-   * Ingest ONLY this account's purchase log - no sales, roster or stock. For an
+   * Ingest ONLY this account's purchase log (and its gold balances) - no sales, roster or stock. For an
    * account that buys crafting mats but whose selling is outside the project's
    * cross-realm scope (its sales must not count). Omitted = false.
    */

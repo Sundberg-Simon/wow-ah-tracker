@@ -4,7 +4,7 @@
 // gitignored data-private/private-terms.txt by scripts/ingestSavedVariables.ts,
 // since that script already has every source of names in memory (parsed
 // straight from local SavedVariables files) and already runs locally, never in
-// CI. Terms: character names (roster/sales/purchases/stock) and counterparty
+// CI. Terms: character names (roster/sales/purchases/stock/gold), guild names (gold) and counterparty
 // (buyer/seller) names, plus the WTF account folder id from
 // earningsAccounts.local.json - the same composition the manual scan in
 // deep-review-2026-09-26.md (finding S1) used and proved workable (140 terms,
@@ -85,6 +85,11 @@ export function collectPrivateTerms(
     }
     for (const h of a.data.stockHeld) {
       add(h.characterName);
+    }
+    // Gold sources: character names and GUILD names (a guild name identifies
+    // the player just as well; realm names stay excluded, see above).
+    for (const g of a.data.goldObservations) {
+      add(g.name);
     }
   }
 

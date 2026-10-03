@@ -143,6 +143,24 @@ export interface StockHeldRow {
   itemId: number;
 }
 
+/** 'character' = one character's own gold; 'warband' = the shared Warband bank; 'guild' = one guild's bank. */
+export type GoldSourceKind = "character" | "warband" | "guild";
+
+export interface GoldObservationRow {
+  kind: GoldSourceKind;
+  /** "realm|character", "warband", or "realm|guild name" - stable id of the source. */
+  sourceKey: string;
+  /** Realm of the character/guild; "" for the Warband bank. */
+  realmName: string;
+  /** Character or guild name; "" for the Warband bank. */
+  name: string;
+  copper: number;
+  /** ISO instant, from the addon's unix timestamp. */
+  observedAt: string;
+  /** Where a Warband/guild read was taken ('login' | 'event' | 'bank' | 'guildbank'); null for characters. */
+  ctx: string | null;
+}
+
 export interface ExtractedAccountData {
   sales: SaleRow[];
   purchases: PurchaseRow[];
@@ -154,6 +172,10 @@ export interface ExtractedAccountData {
   stockHeld: StockHeldRow[];
   /** Problems found while reading the stock table (skipped, never fatal - see extractStock). */
   stockWarnings: string[];
+  /** Gold balance samples (WowAHTrackerGoldDB) - see extractGold. */
+  goldObservations: GoldObservationRow[];
+  /** Problems found while reading the gold table (skipped, never fatal). */
+  goldWarnings: string[];
 }
 
 const LOCAL_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/;
@@ -307,6 +329,66 @@ function extractStock(globals: Record<string, LuaValue>): {
   return { observations, held, warnings };
 }
 
+/**
+ * Reads WowAHTrackerGoldDB (addon/WowAHTracker/Gold.lua). Isolated exactly like
+ * extractStock: anything unreadable is skipped with a warning and can never stop
+ * the earnings ingest.
+ */
+export function extractGold(globals: Record<string, LuaValue>): { observations: GoldObservationRow[]; warnings: string[] } {
+  const observations: GoldObservationRow[] = [];
+  const warnings: string[] = [];
+  const isTable = (v: LuaValue | undefined): v is Record<string, LuaValue> => v !== null && typeof v === "object" && !Array.isArray(v);
+  const readLog = (log: LuaValue | undefined, where: string, base: Omit<GoldObservationRow, "copper" | "observedAt" | "ctx">) => {
+    if (log === undefined || log === null) return;
+    const entries = Array.isArray(log) ? log : isTable(log) ? Object.values(log) : null;
+    if (!entries) {
+      warnings.push(`gold ${where}: log is not a list - skipped`);
+      return;
+    }
+    for (const e of entries) {
+      if (!isTable(e) || typeof e.ts !== "number" || !Number.isFinite(e.ts) || e.ts <= 0 || typeof e.copper !== "number" || !Number.isFinite(e.copper) || e.copper < 0) {
+        warnings.push(`gold ${where}: bad sample ${JSON.stringify(e)} - skipped`);
+        continue;
+      }
+      observations.push({
+        ...base,
+        copper: Math.round(e.copper),
+        observedAt: new Date(e.ts * 1000).toISOString(),
+        ctx: typeof e.ctx === "string" ? e.ctx : null,
+      });
+    }
+  };
+  try {
+    const db = globals.WowAHTrackerGoldDB;
+    if (db === undefined || db === null) return { observations, warnings };
+    if (!isTable(db)) {
+      warnings.push("WowAHTrackerGoldDB is not a table - gold skipped");
+      return { observations, warnings };
+    }
+    for (const [key, rec] of Object.entries(isTable(db.characters) ? db.characters : {})) {
+      if (!isTable(rec) || typeof rec.realm !== "string" || typeof rec.character !== "string" || !rec.realm || !rec.character) {
+        warnings.push(`gold character ${key}: no realm/character - skipped`);
+        continue;
+      }
+      readLog(rec.log, `character ${key}`, { kind: "character", sourceKey: `${rec.realm}|${rec.character}`, realmName: rec.realm, name: rec.character });
+    }
+    for (const [key, rec] of Object.entries(isTable(db.guilds) ? db.guilds : {})) {
+      if (!isTable(rec) || typeof rec.realm !== "string" || typeof rec.name !== "string" || !rec.realm || !rec.name) {
+        warnings.push(`gold guild ${key}: no realm/name - skipped`);
+        continue;
+      }
+      readLog(rec.log, `guild ${key}`, { kind: "guild", sourceKey: `${rec.realm}|${rec.name}`, realmName: rec.realm, name: rec.name });
+    }
+    if (isTable(db.warband)) {
+      readLog(db.warband.log, "warband", { kind: "warband", sourceKey: "warband", realmName: "", name: "" });
+    }
+  } catch (err) {
+    warnings.push(`gold section unreadable, skipped: ${String(err)}`);
+    return { observations: [], warnings };
+  }
+  return { observations, warnings };
+}
+
 export function extractAccountData(globals: Record<string, LuaValue>): ExtractedAccountData {
   let missingRealmOrCharacter = 0;
 
@@ -394,6 +476,7 @@ export function extractAccountData(globals: Record<string, LuaValue>): Extracted
   });
 
   const stock = extractStock(globals);
+  const gold = extractGold(globals);
   return {
     sales,
     purchases,
@@ -402,5 +485,7 @@ export function extractAccountData(globals: Record<string, LuaValue>): Extracted
     stockObservations: stock.observations,
     stockHeld: stock.held,
     stockWarnings: stock.warnings,
+    goldObservations: gold.observations,
+    goldWarnings: gold.warnings,
   };
 }

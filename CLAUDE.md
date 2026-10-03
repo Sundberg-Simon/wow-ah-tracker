@@ -354,6 +354,21 @@ eftersom.]
       först vid logout eller `/reload` — filen ligger alltid efter spelet.
       Uppgiften registreras med `Register-EarningsTask.ps1` (kräver en
       UAC-höjning bara för registreringen, precis som `WowAhTrackerFetch`).
+    - **"Gold looted per day" (2026-10-03)**: stapeldiagram överst i
+      Earnings-fliken — netto-guld per LOKAL kalenderdag efter `captured_at`
+      (= när sale-mailet öppnades, alltså när guldet lootades; TSM-backfillade
+      rader har uppskattad säljtid). Varje dag från första sale till idag finns
+      med, nollfylld. Följer Characters-filtret (samma cross/other-regel som
+      `aggregate.ts`), INTE Window-filtret; längre historik än 120 dagar visar
+      de senaste 120. Ren logik i `src/earnings/daily.ts` (+ tester), SVG i
+      `src/earnings/dailyChartHtml.ts` (inget bibliotek; tooltip per dag vid
+      hovring och tangentbordsfokus, tabellvy under "Show as table"; stapelfärg
+      validerad för ljust och mörkt läge). Klick (eller Enter/Space) på en dag
+      öppnar en lista under diagrammet: varje item som såldes den dagen med
+      enheter, antal sales, netto och realmer (sälj-mailets namn, så
+      suffix-varianter står var för sig); klick igen/Escape/Close stänger.
+      Listan summerar exakt till dagens stapel (testat). Interaktionen är
+      provkörd i Edge via puppeteer-core (scratchpad, inte ett projektberoende).
     - **Konto med bara inköp (`purchasesOnly`, 2026-09-30)**: ett fjärde konto
       köper det mesta av crafting-råvarorna men säljer bara på Simons
       huvudrealm (utanför cross-realm-scope). Det står i
@@ -1533,6 +1548,61 @@ eftersom.]
         (run 80), inte än bekräftad av en schemalagd health-körning.
         Ny lärdom: när ticks tappas och patch-items just lagts till kan health
         gå röd i onödan — en forcerad `sync.yml`-dispatch löser det.
+
+18. **Guldspårning: total guld över tid (byggt 2026-10-03, EJ spelverifierat).**
+    Simons fråga: "hur mycket guld har jag, och hur ser det ut över tid" —
+    som TSM:s guldgraf men bara för honom. Graf överst i Earnings-fliken
+    (ovanför "Gold looted per day"), följer Window-filtret.
+    - **Egen insamling, INTE TSM:s goldLog** (Simons uttryckliga val; han
+      gillar inte hur TSM blandar data mellan konton). TSM har guldhistorik
+      sedan 2018 — den används medvetet inte, så grafen börjar när
+      `Gold.lua` installerades. Föreslå inte TSM-backfill igen utan att fråga.
+    - **Addon** (`addon/WowAHTracker/Gold.lua`, ny SavedVariables
+      `WowAHTrackerGoldDB` → .toc ändrad → full omstart av WoW): per källa en
+      logg `{ts, copper[, ctx]}`, högst ett värde per 5-minutersslot, bara vid
+      ändring (eller vid login), äldre än 120 dagar rensas lokalt (DB:n behåller).
+      Karaktär: `GetMoney()` vid login, PLAYER_MONEY, logout. Warband-bank:
+      `C_Bank.FetchDepositedMoney(Enum.BankType.Account)` vid login (+3 s),
+      ACCOUNT_MONEY och vid bank (ctx login/event/bank). Gildebank:
+      `GetGuildBankMoney()` BARA medan gildebanken är öppen (annars kan klienten
+      ha ett gammalt värde). API-namnen är inte spelverifierade än — 24 kontroller
+      i Lua-sele med stubbat API.
+    - **Delade källor räknas EN gång**: Warband-banken är en bank för alla
+      konton (bekräftat 2026-10-03: samma saldo på alla fyra kontona i TSM:s
+      data) och en gildebank är delad av alla dess medlemmar — båda slås ihop per
+      källa (`kind`+`source_key`) över konton, adderas aldrig per konto.
+    - **Vilka gildebanker som räknas**: Simon väljer, i
+      `config/goldGuilds.local.json` (gitignorerad; gildenamn är personliga)
+      `{ "countedGuildBanks": ["<realm>|<gilde>"] }`. Saknas filen räknas ingen.
+      Rapporten listar varje sedd gildebank med counted/not counted och nyckeln
+      att klistra in. Ett trasigt config ger ett meddelande, aldrig en fallerad rapport.
+    - **Regler i `src/earnings/gold.ts`** (+ tester): total(t) = summan av varje
+      räknad källas senaste värde ≤ t. Före en källas FÖRSTA värde används det
+      första värdet (back-fill) — annars skulle första kvällen se ut som en
+      stigning från 0 när karaktärer loggas in en i taget. Ett Warband-värde på
+      exakt 0 litas bara på om det lästes VID en bank (en tidig login-läsning
+      kan vara 0 innan värdet laddats — overifierat; ett falskt 0 vore en krasch
+      i grafen). Kända luckor: en karaktärs guld är så färskt som senast den
+      spelades; guld som mailas mellan egna karaktärer syns inte förrän det
+      hämtats (totalen dippar tills dess).
+    - **Alla konton räknas**, även `purchasesOnly`-kontot (det är fortfarande
+      Simons guld). Gold-parsningen är isolerad som stock: trasiga poster hoppas
+      över med varning och kan aldrig stoppa intäkts-ingesten.
+    - **DB**: `gold_observations` (insert-only, unik på konto/kind/källa/tid).
+      Personlig data som resten av #13: bara lokalt, aldrig via GitHub/Pages.
+      Gilde- och karaktärsnamn från guldloggen matas in i pre-push-vaktens
+      deny-list (`privateTerms.ts`).
+    - **Graf** (`src/earnings/goldChartHtml.ts`): steglinje (ett saldo gäller
+      tills det ändras) med svag yta, y-axel börjar inte på 0 (avsiktligt —
+      linje kodar position), crosshair + tooltip med total, tid och fördelning
+      (karaktärer / Warband / gildebanker), piltangenter stegar genom ändringar,
+      tabellvy med stängningsvärde per dag, rutor för total nu + förändring i
+      fönstret ("sedan spårningen började" när fönstret går längre bak).
+      Provkörd med syntetisk data i Edge (puppeteer-core, scratchpad) i ljust och
+      mörkt läge; ingen riktig data finns förrän Simon spelat med nya addonet.
+    - **Nästa steg (uttryckligen senare, Simons ord)**: flödes-loggning (vart
+      guldet går: post/AH/vendor/bank/handel) — intressant främst för en
+      VERKLIG craftingkostnad för mounts. Bygg inte innan Simon ber om det.
 
 ## Vad som är byggt och verifierat hittills
 - **Milestone 1**: OAuth-token, connected-realm-upplösning, per-realm-

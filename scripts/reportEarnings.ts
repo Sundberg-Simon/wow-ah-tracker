@@ -38,6 +38,11 @@ import {
   type SplitResult,
   type Totals,
 } from "../src/earnings/aggregate.js";
+import { dailySales, type DailySeries } from "../src/earnings/daily.js";
+import { DAILY_CHART_CSS, DAILY_CHART_SCRIPT, dailyChartHtml } from "../src/earnings/dailyChartHtml.js";
+import { goldHistory, type GoldKind, type GoldObservation } from "../src/earnings/gold.js";
+import { GOLD_CHART_CSS, GOLD_CHART_SCRIPT, goldChartHtml } from "../src/earnings/goldChartHtml.js";
+import { GOLD_GUILDS_CONFIG, loadGoldGuilds } from "../config/goldGuilds.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -390,7 +395,14 @@ async function loadCraftingTab(
   }
 }
 
-function buildHtml(report: EarningsReport, freshness: Freshness[], stock: StockReport, craftingHtml: string): string {
+function buildHtml(
+  report: EarningsReport,
+  freshness: Freshness[],
+  stock: StockReport,
+  craftingHtml: string,
+  daily: Record<Split, DailySeries>,
+  goldHtml: string,
+): string {
   const now = report.generatedAt;
   const hasPatchItems = trackedItems.some((i) => i.active && i.category === "patch-specific");
 
@@ -471,6 +483,8 @@ function buildHtml(report: EarningsReport, freshness: Freshness[], stock: StockR
   .tab-panel { display: none; }
   .tab-panel.active { display: block; }
 ${CRAFTING_CSS}
+${DAILY_CHART_CSS}
+${GOLD_CHART_CSS}
   .controls { padding: 0.2rem 0 0.4rem; }
   .controls .row { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; margin: 0.25rem 0; }
   .controls .row > span { min-width: 5.5rem; color: var(--muted); font-size: 0.85em; }
@@ -520,6 +534,10 @@ ${CRAFTING_CSS}
   </div>
 
   <div class="tab-panel active" id="tab-earnings">
+  ${goldHtml}
+
+  ${dailyChartHtml(daily, SPLIT_LABELS, DEFAULT_SPLIT)}
+
   <h3>Data freshness</h3>
   <table>
     <thead><tr><th>Account</th><th class="num">Sales</th><th class="num">Purchases</th><th>Newest capture</th><th>SavedVariables last saved</th><th>Last pushed to DB</th></tr></thead>
@@ -589,6 +607,8 @@ ${CRAFTING_CSS}
         document.querySelectorAll('.view').forEach(function (el) {
           el.classList.toggle('active', el.dataset.split === state.split && el.dataset.window === state.window);
         });
+        document.querySelectorAll('[data-chart-split]').forEach(function (el) { el.hidden = el.dataset.chartSplit !== state.split; });
+        document.querySelectorAll('[data-gold-window]').forEach(function (el) { el.hidden = el.dataset.goldWindow !== state.window; });
         document.querySelectorAll('[data-set-split]').forEach(function (b) { b.classList.toggle('on', b.dataset.setSplit === state.split); });
         document.querySelectorAll('[data-set-window]').forEach(function (b) { b.classList.toggle('on', b.dataset.setWindow === state.window); });
         // Remembering the view across a reload is a nicety only: browsers may
@@ -601,11 +621,57 @@ ${CRAFTING_CSS}
       document.querySelectorAll('[data-set-split]').forEach(function (b) { b.addEventListener('click', function () { state.split = b.dataset.setSplit; render(); }); });
       document.querySelectorAll('[data-set-window]').forEach(function (b) { b.addEventListener('click', function () { state.window = b.dataset.setWindow; render(); }); });
       document.querySelectorAll('[data-set-sort]').forEach(function (b) { b.addEventListener('click', function () { state.sort = b.dataset.setSort; render(); }); });
+${DAILY_CHART_SCRIPT}
+${GOLD_CHART_SCRIPT}
       render();
     })();
   </script>
 </body>
 </html>`;
+}
+
+/**
+ * The "Total gold" graph (CLAUDE.md #18). Isolated like the Crafting tab: a
+ * failure here becomes a message in place of the graph, never a failed report.
+ */
+async function loadGoldSection(report: EarningsReport, now: Date): Promise<{ html: string; summary: string }> {
+  try {
+    const { rows } = await pool.query(
+      "SELECT account, kind, source_key, realm_name, name, observed_at, copper, ctx FROM gold_observations",
+    );
+    const observations: GoldObservation[] = rows.map((r) => ({
+      account: r.account,
+      kind: r.kind as GoldKind,
+      sourceKey: r.source_key,
+      realmName: r.realm_name,
+      name: r.name,
+      observedAt: r.observed_at,
+      copper: Number(r.copper),
+      ctx: r.ctx,
+    }));
+    const guilds = loadGoldGuilds();
+    const history = goldHistory(observations, guilds.counted, now);
+    const html = goldChartHtml(
+      history,
+      report.windows.map((w) => ({ key: w.key, label: w.label, start: w.start })),
+      DEFAULT_WINDOW,
+      now,
+      { error: guilds.error, fileExists: guilds.fileExists, path: path.relative(path.join(__dirname, ".."), GOLD_GUILDS_CONFIG) },
+    );
+    const last = history.points[history.points.length - 1];
+    return {
+      html,
+      summary: last
+        ? `Total gold: ${gold(last.total)} (${history.sources.filter((s) => s.kind === "character").length} characters, ${guilds.counted.size} guild bank(s) counted)`
+        : `Total gold: no gold recorded yet (${observations.length} samples)`,
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      html: `<div class="goldchart"><h2>Total gold</h2><p class="warn">The gold graph could not be built: ${escapeHtml(message)}</p></div>`,
+      summary: `Gold graph failed: ${message}`,
+    };
+  }
 }
 
 async function main() {
@@ -618,7 +684,9 @@ async function main() {
   mkdirSync(outDir, { recursive: true });
   const outPath = path.join(outDir, "earnings.html");
   const crafting = await loadCraftingTab(inputs.sales, stockInputs);
-  writeFileSync(outPath, buildHtml(report, freshness, stock, crafting.html), "utf8");
+  const daily = dailySales(inputs.sales, inputs.rosterKeys, now);
+  const goldSection = await loadGoldSection(report, now);
+  writeFileSync(outPath, buildHtml(report, freshness, stock, crafting.html, daily, goldSection.html), "utf8");
 
   const allTime = report.windows.find((w) => w.key === "all")!.splits;
   console.log(`Earnings report written to ${outPath}`);
@@ -629,6 +697,7 @@ async function main() {
     );
   }
   console.log(`  ${crafting.summary}`);
+  console.log(`  ${goldSection.summary}`);
   console.log(
     `  All-time net: cross-realm ${gold(allTime.cross.overall.netCopper)} (${allTime.cross.overall.salesCount} sales), ` +
       `other ${gold(allTime.other.overall.netCopper)} (${allTime.other.overall.salesCount}), all ${gold(allTime.all.overall.netCopper)} (${allTime.all.overall.salesCount})`,

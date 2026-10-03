@@ -12,6 +12,8 @@ function emptyData(): ExtractedAccountData {
     stockObservations: [],
     stockHeld: [],
     stockWarnings: [],
+    goldObservations: [],
+    goldWarnings: [],
   };
 }
 
@@ -152,4 +154,15 @@ test("formatPrivateTermsFile with no terms still writes the header", () => {
   const out = formatPrivateTermsFile([]);
   assert.match(out, /^# Auto-generated/);
   assert.ok(!out.includes("\n\n\n"));
+});
+
+test("collects guild and character names from gold samples - not the warband placeholder", () => {
+  const data = emptyData();
+  data.goldObservations.push(
+    { kind: "guild", sourceKey: "SomeRealm|Storage Bankers", realmName: "SomeRealm", name: "Storage Bankers", copper: 1, observedAt: "2026-10-03T00:00:00.000Z", ctx: "guildbank" },
+    { kind: "character", sourceKey: "SomeRealm|Goldalt", realmName: "SomeRealm", name: "Goldalt", copper: 1, observedAt: "2026-10-03T00:00:00.000Z", ctx: null },
+    { kind: "warband", sourceKey: "warband", realmName: "", name: "", copper: 1, observedAt: "2026-10-03T00:00:00.000Z", ctx: "login" },
+  );
+  const terms = collectPrivateTerms([{ data }]);
+  assert.deepEqual(terms, ["Goldalt", "Storage Bankers"]);
 });

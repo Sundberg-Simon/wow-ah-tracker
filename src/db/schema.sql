@@ -291,3 +291,27 @@ CREATE TABLE IF NOT EXISTS stock_held (
   first_ingested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (account, realm_name, character_name, item_id)
 );
+
+-- Gold balances over time (addon Gold.lua -> npm run ingest), for the local
+-- earnings report's total-gold graph (CLAUDE.md #18). Personal data like the
+-- rest of the earnings tables: written from Simon's machine only, never via
+-- GitHub/Pages. Insert-only history. kind: 'character' (source_key
+-- "realm|character"), 'warband' (source_key "warband" - ONE bank shared by all
+-- accounts, so the same source arrives from every account and the report merges
+-- it), 'guild' (source_key "realm|guild", also shared across accounts; which
+-- guilds count is a local report setting, config/goldGuilds.local.json).
+-- ctx: where a warband/guild read was taken ('login'|'event'|'bank'|'guildbank').
+CREATE TABLE IF NOT EXISTS gold_observations (
+  account TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  source_key TEXT NOT NULL,
+  realm_name TEXT NOT NULL,
+  name TEXT NOT NULL,
+  observed_at TIMESTAMPTZ NOT NULL,
+  copper BIGINT NOT NULL,
+  ctx TEXT,
+  ingested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (account, kind, source_key, observed_at)
+);
+
+CREATE INDEX IF NOT EXISTS gold_observations_source_idx ON gold_observations (kind, source_key, observed_at);
