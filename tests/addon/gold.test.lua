@@ -33,6 +33,14 @@ function GetGuildBankMoney() return gbank end
 Enum = { BankType = { Account = 2 }, PlayerInteractionType = { GuildBanker = 10, Banker = 8, AccountBanker = 53, CharacterBanker = 52, Auctioneer = 21 } }
 C_Bank = { FetchDepositedMoney = function(t) return t == 2 and warband or nil end }
 
+-- Saved data from the first version (no dataVersion): character logs hold the
+-- false logout zeros; the Warband/guild logs are fine.
+WowAHTrackerGoldDB = {
+	characters = { ["SomeRealm|Old"] = { realm = "SomeRealm", character = "Old", log = { { ts = 100, copper = 0 } } } },
+	warband = { log = { { ts = 100, copper = 5, ctx = "login" } } },
+	guilds = { ["SomeRealm|G"] = { realm = "SomeRealm", name = "G", log = { { ts = 100, copper = 7, ctx = "guildbank" } } } },
+}
+
 local chunk, err = load(addonSource("Gold.lua"), "@Gold.lua")
 check("Gold.lua loads", chunk ~= nil, err)
 chunk()
@@ -59,6 +67,10 @@ check("lone old sample never dropped", #lone == 1)
 
 -- ---------- events ----------
 fire("ADDON_LOADED", "WowAHTracker")
+check("old character logs dropped once (logout-zero bug)", next(WowAHTrackerGoldDB.characters) == nil and WowAHTrackerGoldDB.dataVersion == 2)
+check("old Warband and guild logs kept", #WowAHTrackerGoldDB.warband.log == 1 and WowAHTrackerGoldDB.guilds["SomeRealm|G"] ~= nil)
+WowAHTrackerGoldDB.warband.log = {} -- the rest of this file expects a fresh Warband log
+WowAHTrackerGoldDB.guilds = {}
 fire("PLAYER_ENTERING_WORLD")
 local ch = WowAHTrackerGoldDB.characters["Garona|Tester"]
 check("character recorded at login", ch and #ch.log == 1 and ch.log[1].copper == 1000000)
@@ -72,6 +84,18 @@ check("gold change recorded", #ch.log == 2 and ch.log[2].copper == 1500000)
 clock = clock + 30; money = 1600000
 fire("PLAYER_MONEY")
 check("change in same slot merged", #ch.log == 2 and ch.log[2].copper == 1600000)
+
+-- logout: the client reports 0 gold there - must never be recorded
+local before = #ch.log
+local lastBefore = ch.log[#ch.log].copper
+money = 0
+fire("PLAYER_LOGOUT")
+check("logout reading (0g) is not recorded", #ch.log == before and ch.log[#ch.log].copper == lastBefore)
+money = 1600000
+-- a second load of the same (already migrated) data keeps the characters
+local keep = WowAHTrackerGoldDB.characters
+fire("ADDON_LOADED", "WowAHTracker")
+check("migration runs only once", WowAHTrackerGoldDB.characters == keep and next(keep) ~= nil)
 
 -- guild bank: not open -> nothing, even on the money event
 fire("GUILDBANK_UPDATE_MONEY")
@@ -100,9 +124,9 @@ fire("PLAYER_INTERACTION_MANAGER_FRAME_SHOW", 8)
 check("warband read at the bank with ctx", WowAHTrackerGoldDB.warband.log[#WowAHTrackerGoldDB.warband.log].ctx == "bank")
 
 -- guild realm from GetGuildInfo when it differs
-function GetGuildInfo() return "Far Guild", "R", 0, "Kazzak" end
+function GetGuildInfo() return "Far Guild", "R", 0, "OtherRealm" end
 fire("PLAYER_INTERACTION_MANAGER_FRAME_SHOW", 10); runTimers()
-check("guild keyed by its own realm", WowAHTrackerGoldDB.guilds["Kazzak|Far Guild"] ~= nil)
+check("guild keyed by its own realm", WowAHTrackerGoldDB.guilds["OtherRealm|Far Guild"] ~= nil)
 fire("PLAYER_INTERACTION_MANAGER_FRAME_HIDE", 10)
 
 -- missing APIs never error

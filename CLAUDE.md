@@ -1584,16 +1584,29 @@ eftersom.]
       `WowAHTrackerGoldDB` → .toc ändrad → full omstart av WoW): per källa en
       logg `{ts, copper[, ctx]}`, högst ett värde per 5-minutersslot, bara vid
       ändring (eller vid login), äldre än 120 dagar rensas lokalt (DB:n behåller).
-      Karaktär: `GetMoney()` vid login, PLAYER_MONEY, logout. Warband-bank:
+      Karaktär: `GetMoney()` vid login och PLAYER_MONEY — ALDRIG vid
+      PLAYER_LOGOUT: **låst lärdom 2026-10-03**, klienten rapporterar 0 guld där.
+      Första versionen läste vid logout → varje karaktär fick ett falskt 0g vid
+      utloggning, och via 5-minutersregeln skrev det över den riktiga
+      login-läsningen. Upptäckt av Simon (en ny karaktär såg ut att ha 0g),
+      bekräftat mot TSM:s egna `money`-värde vid samma utloggning (riktiga
+      saldon mot våra 0g). Fix: ingen logout-läsning (varje verklig
+      ändring fångas redan av PLAYER_MONEY); `dataVersion = 2` i
+      WowAHTrackerGoldDB → addonet kastar karaktärsloggar från v1 en gång vid
+      laddning (Warband/gilde behålls); ingesten hoppar 0g-karaktärsläsningar från
+      filer utan `dataVersion ≥ 2` (så en push FÖRE nästa inloggning inte tar in
+      dem); den enda falska raden som hunnit in i DB:n raderades (exakt nyckel,
+      1 rad). Warband-banken:
       `C_Bank.FetchDepositedMoney(Enum.BankType.Account)` vid login (+3 s),
       ACCOUNT_MONEY och vid bank (ctx login/event/bank). Gildebank:
       `GetGuildBankMoney()` BARA medan gildebanken är öppen (annars kan klienten
       ha ett gammalt värde). 24 kontroller i `tests/addon/gold.test.lua`
       (`npm run test:addon`). **Spelverifierat 2026-10-03** (ett konto, en
-      karaktär): karaktärsguld, Warband-bank (rätt saldo, +200k insättning
-      fångad) och en öppnad gildebank registrerades korrekt. Ännu inte
-      verifierat: att Warband-läsningen vid LOGIN är rätt (den skrevs över av
-      insättningen i samma 5-minutersslot) — syns vid nästa vanliga inloggning.
+      karaktär): karaktärsguld, Warband-bank (rätt saldo, en insättning
+      fångad) och en öppnad gildebank registrerades korrekt. Warband-läsningen
+      vid LOGIN är också rätt (tre login-läsningar samma dag, alla med rätt saldo),
+      så 0-regeln för Warband ("bara vid bank") har inte behövts än — behåll den
+      som skydd.
     - **Delade källor räknas EN gång**: Warband-banken är en bank för alla
       konton (bekräftat 2026-10-03: samma saldo på alla fyra kontona i TSM:s
       data) och en gildebank är delad av alla dess medlemmar — båda slås ihop per

@@ -365,12 +365,25 @@ export function extractGold(globals: Record<string, LuaValue>): { observations: 
       warnings.push("WowAHTrackerGoldDB is not a table - gold skipped");
       return { observations, warnings };
     }
+    // Gold.lua's first version (no dataVersion) also read GetMoney() at logout,
+    // where the client reports 0: its character zeros are false. The fixed
+    // addon drops those logs on its next load, but a push can come first.
+    const oldVersion = typeof db.dataVersion !== "number" || db.dataVersion < 2;
+    const before = observations.length;
     for (const [key, rec] of Object.entries(isTable(db.characters) ? db.characters : {})) {
       if (!isTable(rec) || typeof rec.realm !== "string" || typeof rec.character !== "string" || !rec.realm || !rec.character) {
         warnings.push(`gold character ${key}: no realm/character - skipped`);
         continue;
       }
       readLog(rec.log, `character ${key}`, { kind: "character", sourceKey: `${rec.realm}|${rec.character}`, realmName: rec.realm, name: rec.character });
+    }
+    if (oldVersion) {
+      const charRows = observations.splice(before);
+      const kept = charRows.filter((o) => o.copper > 0);
+      observations.push(...kept);
+      if (kept.length < charRows.length) {
+        warnings.push(`gold: skipped ${charRows.length - kept.length} 0g character reading(s) from the old addon version (false logout readings)`);
+      }
     }
     for (const [key, rec] of Object.entries(isTable(db.guilds) ? db.guilds : {})) {
       if (!isTable(rec) || typeof rec.realm !== "string" || typeof rec.name !== "string" || !rec.realm || !rec.name) {

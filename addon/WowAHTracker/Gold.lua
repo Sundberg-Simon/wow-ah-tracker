@@ -6,8 +6,8 @@
 -- TSM's gold log (Simon's choice, 2026-10-03).
 --
 -- What is recorded, and when:
---   character  GetMoney() at login, on every change (PLAYER_MONEY) and at
---              logout. Always readable.
+--   character  GetMoney() at login and on every change (PLAYER_MONEY) - never
+--              at logout, where the client reports 0 (see DATA_VERSION).
 --   warband    C_Bank.FetchDepositedMoney(Enum.BankType.Account) at login, when
 --              it changes (ACCOUNT_MONEY) and at a bank. The Warband bank is ONE
 --              bank shared by all accounts - every account records it and the
@@ -28,8 +28,20 @@
 local SLOT_SECONDS = 300
 local KEEP_DAYS = 120
 
+-- Bump when stored samples must be discarded because they can't be trusted.
+-- 2: the first version also read GetMoney() at PLAYER_LOGOUT, where the client
+--    reports 0 - every character got a false 0 at logout (and, via the 5-minute
+--    slot rule, its real login reading was overwritten). Found 2026-10-03 against
+--    TSM's own record. Character logs from before that are dropped once; the DB
+--    already holds the good readings and the next login records a real one.
+local DATA_VERSION = 2
+
 local function EnsureDB()
 	WowAHTrackerGoldDB = WowAHTrackerGoldDB or {}
+	if (WowAHTrackerGoldDB.dataVersion or 1) < DATA_VERSION then
+		WowAHTrackerGoldDB.characters = {}
+		WowAHTrackerGoldDB.dataVersion = DATA_VERSION
+	end
 	WowAHTrackerGoldDB.characters = WowAHTrackerGoldDB.characters or {}
 	WowAHTrackerGoldDB.guilds = WowAHTrackerGoldDB.guilds or {}
 	WowAHTrackerGoldDB.warband = WowAHTrackerGoldDB.warband or { log = {} }
@@ -139,7 +151,8 @@ local frame = CreateFrame("Frame")
 frame:RegisterEvent("ADDON_LOADED")
 frame:RegisterEvent("PLAYER_ENTERING_WORLD")
 frame:RegisterEvent("PLAYER_MONEY")
-frame:RegisterEvent("PLAYER_LOGOUT")
+-- Deliberately NOT PLAYER_LOGOUT: GetMoney() returns 0 there (see DATA_VERSION),
+-- and every real change has already been caught by PLAYER_MONEY.
 for _, ev in ipairs({ "ACCOUNT_MONEY", "GUILDBANK_UPDATE_MONEY", "PLAYER_INTERACTION_MANAGER_FRAME_SHOW", "PLAYER_INTERACTION_MANAGER_FRAME_HIDE" }) do
 	pcall(frame.RegisterEvent, frame, ev) -- a name this client doesn't know must not break the file
 end
@@ -155,8 +168,6 @@ frame:SetScript("OnEvent", function(_, event, arg1)
 			recordWarband("login", true)
 		end)
 	elseif event == "PLAYER_MONEY" then
-		recordCharacter(false)
-	elseif event == "PLAYER_LOGOUT" then
 		recordCharacter(false)
 	elseif event == "ACCOUNT_MONEY" then
 		recordWarband("event", false)
