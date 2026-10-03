@@ -471,13 +471,18 @@ local function craftedItems()
 	if WowAhTrackerData and WowAhTrackerData.items then
 		for id, item in pairs(WowAhTrackerData.items) do
 			if item.crafted == true then
-				table.insert(list, { id = tonumber(item.id) or tonumber(id), name = item.name or ("item " .. tostring(id)) })
+				table.insert(list, {
+					id = tonumber(item.id) or tonumber(id),
+					name = item.name or ("item " .. tostring(id)),
+					-- expected on every realm (the restock window); data.lua only says so when it's false
+					restock = item.restock ~= false,
+				})
 			end
 		end
 	end
 	if #list == 0 then
 		for _, item in ipairs(PROBE_ITEMS) do
-			table.insert(list, { id = item.id, name = item.name })
+			table.insert(list, { id = item.id, name = item.name, restock = true })
 		end
 	end
 	table.sort(list, function(a, b)
@@ -572,25 +577,27 @@ end
 -- search-bar lesson in CLAUDE.md about bypassing the Auction House frame's own
 -- state). Only ACTIVE listings count; sold ones already left. Zero listings
 -- with full results is a legitimate all-zero snapshot.
-local function scanAuctionsNow()
+-- Active listings per wanted item, or nil when the client doesn't hold the full
+-- owned-auction list right now (nil = unknown, never 0).
+local function ownedAuctionCounts(items)
 	local ah = C_AuctionHouse
 	if not (ah and ah.GetNumOwnedAuctions and ah.GetOwnedAuctionInfo and ah.HasFullOwnedAuctionResults) then
-		return
+		return nil
 	end
 	local okF, full = try(ah.HasFullOwnedAuctionResults)
 	if not (okF and full == true) then
-		return
+		return nil
 	end
 	local activeStatus = Enum and Enum.AuctionStatus and Enum.AuctionStatus.Active
 	if activeStatus == nil then
-		return -- can't tell active from sold: don't guess
+		return nil -- can't tell active from sold: don't guess
 	end
 	local okN, n = try(ah.GetNumOwnedAuctions)
 	if not okN or type(n) ~= "number" then
-		return
+		return nil
 	end
 	local wanted, counts = {}, {}
-	for _, item in ipairs(craftedItems()) do
+	for _, item in ipairs(items) do
 		wanted[item.id] = true
 		counts[item.id] = 0
 	end
@@ -600,7 +607,14 @@ local function scanAuctionsNow()
 			counts[info.itemKey.itemID] = counts[info.itemKey.itemID] + (info.quantity or 1)
 		end
 	end
-	recordSnapshot("auctions", counts)
+	return counts
+end
+
+local function scanAuctionsNow()
+	local counts = ownedAuctionCounts(craftedItems())
+	if counts then
+		recordSnapshot("auctions", counts)
+	end
 end
 
 -- ---- status ----
@@ -854,21 +868,208 @@ local function printLoginLine()
 	end
 end
 
+-- ============================================================================
+-- RESTOCK WINDOW: while the Auction House is open, a small window lists the
+-- crafted items THIS character has none of - not in its bags and not listed.
+-- Simon's routine per realm is: empty the mailbox (expired listings come back
+-- to the bags), open the AH, post with TSM, log off. So when the AH opens, an
+-- item that is neither in the bags nor listed is one that sold here and must be
+-- brought in. Every crafted item counts unless data.lua says restock = false
+-- (trackedItems.json; e.g. Sky Golem, which is only stocked on some realms).
+-- Mail is not counted: an item still sitting in the mailbox shows as missing.
+-- Read-only: it never writes to the SavedVariables (apart from where the window
+-- was dragged to) and never queries the AH itself - listings are known only
+-- once the client holds the full owned-auction list; until then an item that
+-- isn't in the bags is shown as "not sure", never as missing.
+-- ============================================================================
+
+-- Pure (testable without the game). items: { {id, name, restock}, ... };
+-- bagCounts/ahCounts: { [id] = n } or nil when unknown. Returns
+-- { missing = {names}, unsure = {names}, stocked = n, expected = n, bagsKnown = bool }.
+function WowAHTrackerStock_RestockList(items, bagCounts, ahCounts)
+	local result = { missing = {}, unsure = {}, stocked = 0, expected = 0, bagsKnown = bagCounts ~= nil }
+	for _, item in ipairs(items) do
+		if item.restock then
+			result.expected = result.expected + 1
+			local bags = bagCounts and bagCounts[item.id] or 0
+			local listed = ahCounts and ahCounts[item.id] or 0
+			if bags + listed > 0 then
+				result.stocked = result.stocked + 1
+			elseif bagCounts == nil or ahCounts == nil then
+				table.insert(result.unsure, item.name)
+			else
+				table.insert(result.missing, item.name)
+			end
+		end
+	end
+	return result
+end
+
+-- The window's text for a RestockList result.
+function WowAHTrackerStock_RestockText(r)
+	if r.expected == 0 then
+		return "|cffaaaaaaNo crafted items are marked for restocking.|r"
+	end
+	if not r.bagsKnown then
+		return "|cffaaaaaaBags not loaded yet.|r"
+	end
+	local lines = {}
+	if #r.missing > 0 then
+		table.insert(lines, string.format("|cffff5555Restock (%d):|r", #r.missing))
+		for _, name in ipairs(r.missing) do
+			table.insert(lines, "  " .. name)
+		end
+	end
+	if #r.unsure > 0 then
+		if #lines > 0 then
+			table.insert(lines, " ")
+		end
+		table.insert(lines, string.format("|cffaaaaaaNot in bags (%d) - open the Auctions tab to see if they're listed:|r", #r.unsure))
+		for _, name in ipairs(r.unsure) do
+			table.insert(lines, "  |cffaaaaaa" .. name .. "|r")
+		end
+	end
+	if #r.missing == 0 and #r.unsure == 0 then
+		table.insert(lines, string.format("|cff33ff99All %d items stocked.|r", r.expected))
+	else
+		table.insert(lines, " ")
+		table.insert(lines, string.format("Stocked: %d/%d", r.stocked, r.expected))
+	end
+	return table.concat(lines, "\n")
+end
+
+local restockFrame, restockBody
+local ahOpen, restockDismissed = false, false
+
+local function restockWindow()
+	if restockFrame then
+		return restockFrame
+	end
+	local f = CreateFrame("Frame", "WowAHTrackerRestockFrame", UIParent, "BackdropTemplate")
+	f:SetSize(250, 80)
+	f:SetFrameStrata("DIALOG")
+	f:SetClampedToScreen(true)
+	if f.SetBackdrop then
+		f:SetBackdrop({
+			bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+			edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+			tile = true,
+			tileSize = 16,
+			edgeSize = 16,
+			insets = { left = 4, right = 4, top = 4, bottom = 4 },
+		})
+		f:SetBackdropColor(0, 0, 0, 0.85)
+	end
+	-- Draggable; where it was left is remembered (per account, like the rest of the stock data).
+	f:SetMovable(true)
+	f:EnableMouse(true)
+	f:RegisterForDrag("LeftButton")
+	f:SetScript("OnDragStart", f.StartMoving)
+	f:SetScript("OnDragStop", function(self)
+		self:StopMovingOrSizing()
+		local point, _, relativePoint, x, y = self:GetPoint()
+		EnsureDB()
+		WowAHTrackerStockDB.restockPos = { point = point, relativePoint = relativePoint, x = x, y = y }
+	end)
+	local pos = WowAHTrackerStockDB and WowAHTrackerStockDB.restockPos
+	if pos and pos.point then
+		f:SetPoint(pos.point, UIParent, pos.relativePoint or pos.point, pos.x or 0, pos.y or 0)
+	else
+		f:SetPoint("RIGHT", UIParent, "RIGHT", -60, 120)
+	end
+
+	local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	title:SetPoint("TOPLEFT", 10, -10)
+	title:SetPoint("RIGHT", -28, 0)
+	title:SetJustifyH("LEFT")
+	f.title = title
+
+	local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
+	close:SetPoint("TOPRIGHT", -2, -2)
+	close:SetScript("OnClick", function()
+		restockDismissed = true -- back at the next AH visit
+		f:Hide()
+	end)
+
+	local body = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	body:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -6)
+	body:SetWidth(230)
+	body:SetJustifyH("LEFT")
+	body:SetJustifyV("TOP")
+	restockBody = body
+
+	f:Hide()
+	restockFrame = f
+	return f
+end
+
+local function refreshRestockWindow()
+	if not ahOpen or restockDismissed then
+		return
+	end
+	local items = craftedItems()
+	local result = WowAHTrackerStock_RestockList(items, scanBagCounts(items), ownedAuctionCounts(items))
+	local f = restockWindow()
+	f.title:SetText(string.format("Restock - %s", GetRealmName() or "?"))
+	restockBody:SetText(WowAHTrackerStock_RestockText(result))
+	f:SetHeight(math.max(60, restockBody:GetStringHeight() + 40))
+	f:Show()
+end
+
+local function onAuctionHouseShown()
+	if ahOpen then
+		return -- both AH-open events can fire for the same visit
+	end
+	ahOpen = true
+	restockDismissed = false
+	refreshRestockWindow()
+end
+
+local function onAuctionHouseClosed()
+	ahOpen = false
+	if restockFrame then
+		restockFrame:Hide()
+	end
+end
+
+local function isAuctioneerInteraction(interactionType)
+	return Enum and Enum.PlayerInteractionType and interactionType == Enum.PlayerInteractionType.Auctioneer
+end
+
 local eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:RegisterEvent("PLAYER_LOGIN")
 eventFrame:RegisterEvent("BAG_UPDATE_DELAYED")
 eventFrame:RegisterEvent("OWNED_AUCTIONS_UPDATED")
-eventFrame:SetScript("OnEvent", function(_, event, addonName)
+-- AH open/close: the dedicated events plus the generic interaction ones, each
+-- registered under pcall so a name this client doesn't know can't break the file.
+for _, ev in ipairs({ "AUCTION_HOUSE_SHOW", "AUCTION_HOUSE_CLOSED", "PLAYER_INTERACTION_MANAGER_FRAME_SHOW", "PLAYER_INTERACTION_MANAGER_FRAME_HIDE" }) do
+	pcall(eventFrame.RegisterEvent, eventFrame, ev)
+end
+eventFrame:SetScript("OnEvent", function(_, event, arg1)
 	if event == "ADDON_LOADED" then
-		if addonName == "WowAHTracker" then
+		if arg1 == "WowAHTracker" then
 			EnsureDB()
 		end
 	elseif event == "PLAYER_LOGIN" then
 		printLoginLine()
 	elseif event == "BAG_UPDATE_DELAYED" then
 		requestBagScan()
+		refreshRestockWindow()
 	elseif event == "OWNED_AUCTIONS_UPDATED" then
 		scanAuctionsNow()
+		refreshRestockWindow()
+	elseif event == "AUCTION_HOUSE_SHOW" then
+		onAuctionHouseShown()
+	elseif event == "AUCTION_HOUSE_CLOSED" then
+		onAuctionHouseClosed()
+	elseif event == "PLAYER_INTERACTION_MANAGER_FRAME_SHOW" then
+		if isAuctioneerInteraction(arg1) then
+			onAuctionHouseShown()
+		end
+	elseif event == "PLAYER_INTERACTION_MANAGER_FRAME_HIDE" then
+		if isAuctioneerInteraction(arg1) then
+			onAuctionHouseClosed()
+		end
 	end
 end)

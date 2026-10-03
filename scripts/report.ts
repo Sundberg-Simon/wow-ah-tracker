@@ -37,6 +37,8 @@ interface ItemData {
   ilvl: number | null;
   /** Hand-set in trackedItems.json; exported to data.lua for the addon's crafted-item stock scan. */
   crafted: boolean;
+  /** Crafted and expected on every realm (the addon's restock window); exported to data.lua only when false. */
+  restock: boolean;
   capturedAt: Date | null;
   euMinCopper: number | null;
   euMedianCopper: number | null;
@@ -66,6 +68,7 @@ async function gatherItemData(item: TrackedItem, ilvl: number | null = null): Pr
       category: item.category,
       ilvl,
       crafted: item.crafted === true,
+      restock: item.crafted === true && item.restock !== false,
       capturedAt: null,
       euMinCopper: null,
       euMedianCopper: null,
@@ -87,6 +90,7 @@ async function gatherItemData(item: TrackedItem, ilvl: number | null = null): Pr
       category: item.category,
       ilvl,
       crafted: item.crafted === true,
+      restock: item.crafted === true && item.restock !== false,
       capturedAt: null,
       euMinCopper: null,
       euMedianCopper: null,
@@ -103,6 +107,7 @@ async function gatherItemData(item: TrackedItem, ilvl: number | null = null): Pr
     category: item.category,
     ilvl,
     crafted: item.crafted === true,
+    restock: item.crafted === true && item.restock !== false,
     capturedAt,
     euMinCopper: Math.min(...prices),
     euMedianCopper: median(prices),
@@ -330,6 +335,7 @@ function buildLuaItemEntry(series: ItemData[]): string {
     `    category = ${luaString(head.category)},`,
   ];
   if (head.crafted) lines.push("    crafted = true,");
+  if (head.crafted && !head.restock) lines.push("    restock = false,");
   if (variants.length === 0) {
     lines.push(buildLuaPriceFields(head, "    "));
   } else {

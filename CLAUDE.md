@@ -554,9 +554,38 @@ eftersom.]
         20 ingest/parser-tester (varav en rullad-tillbaka DB-transaktion),
         visuell kontroll av rapportsektionen i riktig Chrome. EJ verifierat
         i spelet (kräver att Simon spelar) — se "Obligatoriskt sista steg".
-      * **Ej pushat**: `crafted = true` i data.lua (`scripts/report.ts`) ligger
-        som lokal commit tills Simon säger till; addonet fungerar utan den via
-        fallback-listan.
+      * `crafted = true` i data.lua (`scripts/report.ts`) är pushat och
+        publicerat; fallback-listan i addonet används bara om data.lua saknar
+        flaggan.
+    - **Restock-fönster i spelet (byggt 2026-10-03, Simons val)**: medan AH:t
+      är öppet visar ett litet, flyttbart fönster ("Restock - <realm>") vilka
+      crafted items DEN HÄR karaktären har noll av — varken i väskorna eller
+      aktivt listade. Simons rutin per realm: töm posten (utgångna listningar
+      kommer tillbaka till väskorna) → öppna AH → TSM post scan → posta → logga
+      ut. När AH öppnas är "varken i väskan eller listad" alltså = såld här,
+      måste fyllas på. Uppdateras live (BAG_UPDATE_DELAYED /
+      OWNED_AUCTIONS_UPDATED), stängs med AH:t, krysset döljer det till nästa
+      AH-besök, positionen sparas i `WowAHTrackerStockDB.restockPos`. INTE i
+      chatten (Simons uttryckliga önskan).
+      * **Vilka items**: alla crafted items utom de med `"restock": false` i
+        `trackedItems.json` (exporteras till data.lua bara när false; i dag
+        bara Sky Golem). Simons beslut: alla övriga 10 ska finnas på alla
+        realmer (han håller på att fylla på) — fråga inte igen om att utesluta
+        Rocket/World Spinner/Hammer/Longblade.
+      * **Okänt är aldrig "restock"**: listningar räknas bara när klienten har
+        HELA egna-auktionslistan (`HasFullOwnedAuctionResults`); innan dess
+        visas ett item som inte ligger i väskan som "inte säker — öppna
+        Auctions-fliken". Addonet frågar aldrig AH:t självt (samma lärdom som
+        sökrutan). Post räknas inte: ett item kvar i brevlådan visas som saknat.
+      * Logiken är rena funktioner (`WowAHTrackerStock_RestockList` /
+        `_RestockText`) i `Stock.lua` (ingen ny fil → ingen .toc-ändring →
+        `/reload` räcker). 33 kontroller i en Lua-sele med stubbat WoW-API
+        (wasmoon), inkl. en mutationskontroll; EJ spelverifierat än — särskilt
+        placeringen bredvid TSM:s AH-fönster är oprövad.
+      * Känd begränsning (inte åtgärdad, Simons val): loggar man ut direkt efter
+        sista posten kan klientens egna-auktionslista hinna sakna de nya
+        listningarna (2 av 77 karaktärer 2026-10-03) — vänta 2–3 s före
+        utloggning.
 
 16. **WoW Crafting Optimizer — egen modul i samma repo, egen lokal SQLite,
     byggs bottom-up (påbörjad 2026-09-20).** Beräknar billigaste sättet att

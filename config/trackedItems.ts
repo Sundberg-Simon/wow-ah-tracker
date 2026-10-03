@@ -30,14 +30,18 @@
  *   warns). Add a row there when a NEW item level is tracked - the in-game
  *   categorizer's export shows the ids (`bonus=`) next to the item level.
  *
- * crafted / est_cost_per_unit (both OPTIONAL, report-only):
- *   Orthogonal to category and to everything the sync does - the sync,
- *   data.lua and the addon never read them. They exist only so the local
- *   earnings report can show an ESTIMATED profit next to net earnings for
- *   crafted items. Both are maintained by hand; there is deliberately no
- *   automatic material-price tracking (a first, simple version - revisit only
- *   if the manual estimate proves too crude).
+ * crafted / est_cost_per_unit (both OPTIONAL):
+ *   Orthogonal to category and to everything the sync collects. The local
+ *   earnings report uses them to show an ESTIMATED profit next to net earnings
+ *   for crafted items; `crafted` is also exported to data.lua, where the addon
+ *   uses it to decide which items it counts as stock (CLAUDE.md #15). Both are
+ *   maintained by hand; there is deliberately no automatic material-price
+ *   tracking (a first, simple version - revisit only if the manual estimate
+ *   proves too crude).
  *     crafted:           true if Simon crafts it (absent = false).
+ *     restock:           crafted items only; false = leave it out of the
+ *                        addon's per-realm restock window (absent = true:
+ *                        every crafted item is expected on every realm).
  *     est_cost_per_unit: estimated cost to make/buy ONE unit, in GOLD (e.g.
  *                        350 or 12.5), or null/absent when not set. The report
  *                        shows profit = net earned - cost x units only where a
@@ -70,6 +74,8 @@ export interface TrackedItem {
   active: boolean;
   /** Report-only, see the header comment. Absent = false. */
   crafted?: boolean;
+  /** Crafted items only: false = not expected on every realm (left out of the addon's restock window). Absent = true. */
+  restock?: boolean;
   /** Patch-specific gear only: item levels tracked as separate series. See the header comment. */
   variants?: number[];
   /** Report-only estimated cost of ONE unit, in gold; null/absent = not set. */
