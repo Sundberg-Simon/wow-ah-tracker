@@ -76,6 +76,15 @@ function timeTicks(t0: number, t1: number): { at: number; label: string }[] {
           : d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
     ticks.push({ at: t, label });
   }
+  // A span shorter than one step (e.g. the first minutes of tracking) has no
+  // clean tick inside it - label its two ends instead of leaving the axis bare.
+  if (ticks.length === 0) {
+    const clock = (t: number) => new Date(t).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+    return [
+      { at: t0, label: clock(t0) },
+      { at: t1, label: clock(t1) },
+    ];
+  }
   return ticks;
 }
 
