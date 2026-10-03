@@ -1604,13 +1604,21 @@ eftersom.]
       (`npm run test:addon`). **Spelverifierat 2026-10-03** (ett konto, en
       karaktär): karaktärsguld, Warband-bank (rätt saldo, en insättning
       fångad) och en öppnad gildebank registrerades korrekt. Warband-läsningen
-      vid LOGIN är också rätt (tre login-läsningar samma dag, alla med rätt saldo),
-      så 0-regeln för Warband ("bara vid bank") har inte behövts än — behåll den
-      som skydd.
+      vid LOGIN är rätt (tre login-läsningar samma dag, alla med rätt saldo) — på
+      den klient som har banken, se nästa punkt.
     - **Delade källor räknas EN gång**: Warband-banken är en bank för alla
-      konton (bekräftat 2026-10-03: samma saldo på alla fyra kontona i TSM:s
-      data) och en gildebank är delad av alla dess medlemmar — båda slås ihop per
-      källa (`kind`+`source_key`) över konton, adderas aldrig per konto.
+      konton (Simon har EN Battle.net-inloggning för alla fyra WoW-kontona,
+      bekräftat av honom 2026-10-03) och en gildebank är delad av alla dess
+      medlemmar — båda slås ihop per källa (`kind`+`source_key`) över konton,
+      adderas aldrig per konto.
+    - **Warband-banken är LÅST till en körande klient åt gången** (Simons ord,
+      2026-10-03): övriga klienter läser 0. Sågs i spelet: konto 4 (startat
+      först) läste rätt saldo, konto 1 läste 0 vid login. Simon kör flera
+      klienter samtidigt, så ett 0 betyder "låst", inte "tom" — rapporten
+      ignorerar därför VARJE Warband-läsning på exakt 0, var den än togs (den
+      första regeln, "0 litas på vid en bank", hade släppt igenom en låst klient
+      vid banken = en krasch i grafen). Kostnad: töms banken någon gång på
+      riktigt behåller grafen senaste saldo.
     - **Vilka gildebanker som räknas**: Simon väljer, i
       `config/goldGuilds.local.json` (gitignorerad; gildenamn är personliga)
       `{ "countedGuildBanks": ["<realm>|<gilde>"] }`. Saknas filen räknas ingen.
@@ -1619,10 +1627,8 @@ eftersom.]
     - **Regler i `src/earnings/gold.ts`** (+ tester): total(t) = summan av varje
       räknad källas senaste värde ≤ t. Före en källas FÖRSTA värde används det
       första värdet (back-fill) — annars skulle första kvällen se ut som en
-      stigning från 0 när karaktärer loggas in en i taget. Ett Warband-värde på
-      exakt 0 litas bara på om det lästes VID en bank (en tidig login-läsning
-      kan vara 0 innan värdet laddats — overifierat; ett falskt 0 vore en krasch
-      i grafen). Kända luckor: en karaktärs guld är så färskt som senast den
+      stigning från 0 när karaktärer loggas in en i taget. Warband-läsningar på
+      exakt 0 ignoreras alltid (låst klient, se ovan). Kända luckor: en karaktärs guld är så färskt som senast den
       spelades; guld som mailas mellan egna karaktärer syns inte förrän det
       hämtats (totalen dippar tills dess).
     - **Alla konton räknas**, även `purchasesOnly`-kontot (det är fortfarande

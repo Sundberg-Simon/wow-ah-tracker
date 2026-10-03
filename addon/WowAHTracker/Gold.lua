@@ -11,9 +11,9 @@
 --   warband    C_Bank.FetchDepositedMoney(Enum.BankType.Account) at login, when
 --              it changes (ACCOUNT_MONEY) and at a bank. The Warband bank is ONE
 --              bank shared by all accounts - every account records it and the
---              report merges them, never adds them. Each sample says where it
---              was taken (ctx); the report only trusts a 0 read at a bank, in
---              case the value isn't loaded yet at login (unverified in game).
+--              report merges them, never adds them. It is usable by ONE running
+--              client at a time - the others read 0 - so the report ignores every
+--              0 Warband reading. Each sample says where it was taken (ctx).
 --   guild      GetGuildBankMoney() ONLY while that guild's bank is open: outside
 --              it the client may hold an old value. Keyed by realm|guild name,
 --              shared across accounts like the Warband bank. Which guild banks

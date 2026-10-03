@@ -42,11 +42,11 @@ describe("goldHistory", () => {
     assert.equal(h.sources.filter((s) => s.kind === "warband").length, 1);
   });
 
-  it("ignores a 0 Warband read unless it was taken at a bank", () => {
-    const wb = (h: number, gold: number, ctx: string) => obs({ kind: "warband", sourceKey: "warband", ctx }, h, gold);
-    const h = goldHistory([wb(1, 1000, "login"), wb(2, 0, "login"), wb(3, 0, "bank")], new Set(), T(4));
-    assert.deepEqual(h.points.map(total), [1000, 0, 0]);
-    assert.equal(h.points[1].at, T(3).getTime());
+  it("ignores every 0 Warband read - the bank is locked to another running client", () => {
+    const wb = (account: string, h: number, gold: number, ctx: string) => obs({ kind: "warband", sourceKey: "warband", account, ctx }, h, gold);
+    // account A online with the bank; account B (locked) reads 0 at login and even at a bank
+    const h = goldHistory([wb("A", 1, 1000, "login"), wb("B", 2, 0, "login"), wb("B", 3, 0, "bank"), wb("A", 4, 1200, "event")], new Set(), T(5));
+    assert.deepEqual(h.points.map(total), [1000, 1200, 1200]);
   });
 
   it("counts only the chosen guild banks, but lists every one", () => {

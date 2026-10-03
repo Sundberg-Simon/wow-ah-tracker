@@ -13,9 +13,13 @@
 // evening with the addon, and without this the graph would climb from 0 as each
 // character is logged in for the first time - a ramp that isn't real money.
 //
-// A Warband reading of exactly 0 is only trusted when taken AT a bank: a read
-// at login might come before the client has the value (unverified in game), and
-// a false 0 would show as a crash in the graph.
+// A Warband reading of exactly 0 is never trusted, wherever it was taken. The
+// Warband bank is shared by all of Simon's WoW accounts but usable by only ONE
+// running client at a time; the other clients read it as 0 (seen in game
+// 2026-10-03: account 4 online read the real balance, account 1 started after
+// it read 0). He runs several clients at once, so a 0 means "locked", not
+// "empty" - and a false 0 would show as a crash in the graph. Cost: if the
+// bank is ever really emptied, the graph keeps its last non-zero balance.
 
 export type GoldKind = "character" | "warband" | "guild";
 
@@ -60,10 +64,10 @@ export interface GoldHistory {
 const sourceId = (o: { kind: string; sourceKey: string }) => `${o.kind}\u001e${o.sourceKey}`;
 
 export function goldHistory(observations: readonly GoldObservation[], countedGuilds: ReadonlySet<string>, now: Date): GoldHistory {
-  // Merge per source across accounts; drop untrusted zero Warband reads.
+  // Merge per source across accounts; drop zero Warband reads (locked by another client).
   const bySource = new Map<string, { kind: GoldKind; sourceKey: string; realmName: string; name: string; samples: { at: number; copper: number }[] }>();
   for (const o of observations) {
-    if (o.kind === "warband" && o.copper === 0 && o.ctx !== "bank") continue;
+    if (o.kind === "warband" && o.copper === 0) continue;
     const id = sourceId(o);
     const s = bySource.get(id) ?? { kind: o.kind, sourceKey: o.sourceKey, realmName: o.realmName, name: o.name, samples: [] };
     s.samples.push({ at: o.observedAt.getTime(), copper: o.copper });
