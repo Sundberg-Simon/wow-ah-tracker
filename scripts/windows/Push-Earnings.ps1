@@ -88,6 +88,14 @@ try {
     }
     Write-Status "Ingest finished."
 
+    # Back up the earnings tables right after they changed (sale mails can't be re-read, so the DB
+    # rows are the only record): a verified local copy plus the Google Drive copy. Best-effort - a
+    # failed backup is reported but never fails the push.
+    $earningsBackupExit = Invoke-NpmScript "backup:earnings"
+    if ($earningsBackupExit -ne 0) {
+        Write-Status "WARNING: earnings backup exited $earningsBackupExit - see the output above. The ingest itself succeeded."
+    }
+
     # Regenerate the report from what's in the DB now. A failure here doesn't
     # undo the (already committed, idempotent) ingest - say so explicitly.
     $reportExit = Invoke-NpmScript "report:earnings"

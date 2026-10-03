@@ -1,8 +1,19 @@
-import { copyFileSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { craftingDbPath } from "./db.js";
 import { ValidationError } from "./validate.js";
+import {
+  DEFAULT_KEEP_DAYS,
+  DEFAULT_KEEP_HOURS,
+  backupNamePattern,
+  listTimestampedBackups,
+  pruneTimestampedBackups,
+  stamp,
+  type BackupFileInfo,
+} from "../backup/retention.js";
+
+export { DEFAULT_KEEP_DAYS, DEFAULT_KEEP_HOURS, type BackupFileInfo };
 
 /*
  * Backups of the local crafting DB. The prospecting batches in it are the
@@ -25,9 +36,7 @@ import { ValidationError } from "./validate.js";
  * (CRAFTING_BACKUP_EXTRA_DIR) is what guards against losing the disk.
  */
 
-const FILE_PATTERN = /^crafting-(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})(\d{2})\.sqlite$/;
-export const DEFAULT_KEEP_HOURS = 24;
-export const DEFAULT_KEEP_DAYS = 30;
+const FILE_PATTERN = backupNamePattern("crafting", ".sqlite");
 
 export interface BackupConfig {
   /** Where the main backups go. */
@@ -42,15 +51,6 @@ export function backupConfig(env: NodeJS.ProcessEnv = process.env, dbPath: strin
     dir: env.CRAFTING_BACKUP_DIR?.trim() || join(dirname(dbPath), "backups"),
     extraDir: env.CRAFTING_BACKUP_EXTRA_DIR?.trim() || null,
   };
-}
-
-export interface BackupFileInfo {
-  name: string;
-  /** When the backup was taken, parsed from its name (local time). */
-  takenAt: Date;
-  path: string;
-  bytes: number;
-  modified: Date;
 }
 
 export interface Verification {
@@ -176,51 +176,14 @@ export function createBackup(
   return result;
 }
 
-const pad = (n: number) => String(n).padStart(2, "0");
-const dayKey = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-
-/** Local-time stamp used in backup names: YYYY-MM-DD-HHMMSS (sorts chronologically as text). */
-function stamp(d: Date): string {
-  return `${dayKey(d)}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-}
-
 /** Backups in a directory, newest first. Only files named crafting-YYYY-MM-DD-HHMMSS.sqlite count. */
 export function listBackups(dir: string): BackupFileInfo[] {
-  if (!existsSync(dir)) return [];
-  const found: BackupFileInfo[] = [];
-  for (const name of readdirSync(dir)) {
-    const m = FILE_PATTERN.exec(name);
-    if (!m) continue;
-    const [y, mo, d, h, mi, se] = m.slice(1).map(Number);
-    const path = join(dir, name);
-    const st = statSync(path);
-    found.push({ name, path, bytes: st.size, modified: st.mtime, takenAt: new Date(y, mo - 1, d, h, mi, se) });
-  }
-  return found.sort((x, y) => (x.name < y.name ? 1 : -1));
+  return listTimestampedBackups(dir, FILE_PATTERN);
 }
 
-/**
- * Retention: keep every backup from the last `keepHours`, plus the newest one
- * of each calendar day for the last `keepDays` days (today included); delete
- * the rest. Returns what was removed.
- */
+/** Retention (see src/backup/retention.ts); only crafting backups are touched. */
 function pruneBackups(dir: string, now: Date, keepHours: number, keepDays: number): string[] {
-  const recentCutoff = now.getTime() - keepHours * 3_600_000;
-  const oldestDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (keepDays - 1));
-  const seenDays = new Set<string>();
-  const removed: string[] = [];
-  for (const f of listBackups(dir)) {
-    // newest first, so the first file seen for a day is that day's newest
-    const key = dayKey(f.takenAt);
-    const newestOfDay = !seenDays.has(key);
-    seenDays.add(key);
-    const keep = f.takenAt.getTime() >= recentCutoff || (newestOfDay && f.takenAt >= oldestDay);
-    if (!keep) {
-      rmSync(f.path, { force: true });
-      removed.push(f.path);
-    }
-  }
-  return removed;
+  return pruneTimestampedBackups(dir, FILE_PATTERN, now, keepHours, keepDays);
 }
 
 export interface RestoreResult {

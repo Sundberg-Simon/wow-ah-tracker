@@ -13,6 +13,7 @@
     "health": "tsx scripts/healthCheck.ts",
     "ingest": "tsx scripts/ingestSavedVariables.ts",
     "backfill:tsm": "tsx scripts/backfillSalesFromTsm.ts",
+    "backup:earnings": "tsx scripts/backupEarnings.ts",
     "report:earnings": "tsx scripts/reportEarnings.ts",
     "rollup": "tsx scripts/rollupSnapshots.ts",
     "typecheck": "tsc --noEmit",
@@ -20,7 +21,8 @@
     "test:crafting": "node --import tsx --test src/crafting/*.test.ts",
     "test:sync": "node --import tsx --test src/sync/*.test.ts",
     "test:earnings": "node --import tsx --test src/earnings/*.test.ts",
-    "test:privacy": "node --import tsx --test src/privacy/*.test.ts scripts/checkPrivateData.test.ts"
+    "test:privacy": "node --import tsx --test src/privacy/*.test.ts scripts/checkPrivateData.test.ts",
+    "test:addon": "tsx scripts/testAddon.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
@@ -32,6 +34,7 @@
     "@types/pg": "^8.11.6",
     "luaparse": "^0.3.1",
     "tsx": "^4.19.0",
-    "typescript": "^5.6.0"
+    "typescript": "^5.6.0",
+    "wasmoon": "^1.16.0"
   }
 }

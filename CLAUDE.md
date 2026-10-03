@@ -369,6 +369,29 @@ eftersom.]
       suffix-varianter står var för sig); klick igen/Escape/Close stänger.
       Listan summerar exakt till dagens stapel (testat). Interaktionen är
       provkörd i Edge via puppeteer-core (scratchpad, inte ett projektberoende).
+    - **Backup av earnings-datan (2026-10-03)**: sälj-mail går inte att läsa om
+      efter att de öppnats, så DB-raderna är enda kopian. `npm run
+      backup:earnings` (`src/earnings/backup.ts`) läser ALLA earnings-tabeller
+      (sales, purchases, ingest_runs, roster, stock_observations, stock_held,
+      gold_observations, realm_population_history) i EN read-only REPEATABLE
+      READ-transaktion → gzippad JSON `earnings-<tid>.json.gz` i
+      `data-private/backups/` + kopia i Google Drive-mappen (samma som
+      crafting-backupen: `EARNINGS_BACKUP_EXTRA_DIR`, annars
+      `CRAFTING_BACKUP_EXTRA_DIR`). Filen läses tillbaka och varje tabells
+      radantal + SHA-256 av raderna måste stämma mot DB:n, annars sparas och
+      gallras inget. Tidsstämplar läses som text med MIKROSEKUNDER (via JS
+      Date blev de millisekunder → inexakt backup; hittat när en restore-
+      torrkörning ville lägga till 259 rader som redan fanns). Samma gallring
+      som crafting (allt senaste 24 h, sedan senaste per dag i 30 dagar), delad
+      kod i `src/backup/retention.ts` — de två sorterna delar mappar utan att
+      gallra varandras filer. Körs automatiskt av `Push-Earnings.ps1` direkt
+      efter ingesten (best-effort, fäller aldrig pushen).
+      **Restore** (`-- restore <fil>`, `--apply` för att skriva) är
+      MERGE-ONLY: lägger till rader som saknas, raderar/ändrar aldrig; torrkörning
+      som standard. Rostern återställs bara för konton som saknar roster helt
+      (annars skulle `/waht realms remove` ångras). Verifierat mot skarp DB:
+      torrkörning av färsk backup = 0 rader att lägga till; med två påhittade
+      saknade rader = exakt 2, DB oförändrad efteråt.
     - **Konto med bara inköp (`purchasesOnly`, 2026-09-30)**: ett fjärde konto
       köper det mesta av crafting-råvarorna men säljer bara på Simons
       huvudrealm (utanför cross-realm-scope). Det står i
@@ -594,9 +617,9 @@ eftersom.]
         sökrutan). Post räknas inte: ett item kvar i brevlådan visas som saknat.
       * Logiken är rena funktioner (`WowAHTrackerStock_RestockList` /
         `_RestockText`) i `Stock.lua` (ingen ny fil → ingen .toc-ändring →
-        `/reload` räcker). 33 kontroller i en Lua-sele med stubbat WoW-API
-        (wasmoon), inkl. en mutationskontroll; EJ spelverifierat än — särskilt
-        placeringen bredvid TSM:s AH-fönster är oprövad.
+        `/reload` räcker). 33 kontroller i `tests/addon/restock.test.lua`
+        (`npm run test:addon`), inkl. en mutationskontroll; EJ spelverifierat
+        än — särskilt placeringen bredvid TSM:s AH-fönster är oprövad.
       * Känd begränsning (inte åtgärdad, Simons val): loggar man ut direkt efter
         sista posten kan klientens egna-auktionslista hinna sakna de nya
         listningarna (2 av 77 karaktärer 2026-10-03) — vänta 2–3 s före
@@ -1565,8 +1588,12 @@ eftersom.]
       `C_Bank.FetchDepositedMoney(Enum.BankType.Account)` vid login (+3 s),
       ACCOUNT_MONEY och vid bank (ctx login/event/bank). Gildebank:
       `GetGuildBankMoney()` BARA medan gildebanken är öppen (annars kan klienten
-      ha ett gammalt värde). API-namnen är inte spelverifierade än — 24 kontroller
-      i Lua-sele med stubbat API.
+      ha ett gammalt värde). 24 kontroller i `tests/addon/gold.test.lua`
+      (`npm run test:addon`). **Spelverifierat 2026-10-03** (ett konto, en
+      karaktär): karaktärsguld, Warband-bank (rätt saldo, +200k insättning
+      fångad) och en öppnad gildebank registrerades korrekt. Ännu inte
+      verifierat: att Warband-läsningen vid LOGIN är rätt (den skrevs över av
+      insättningen i samma 5-minutersslot) — syns vid nästa vanliga inloggning.
     - **Delade källor räknas EN gång**: Warband-banken är en bank för alla
       konton (bekräftat 2026-10-03: samma saldo på alla fyra kontona i TSM:s
       data) och en gildebank är delad av alla dess medlemmar — båda slås ihop per
@@ -1791,3 +1818,7 @@ beskrivit exakt vad som hände i chatten (eller inte hände), och du har
 fått den återkopplingen — anta aldrig att Lua-koden fungerar bara för
 att den parsar syntaktiskt (verifierat lokalt med `luaparse`, som bara
 fångar syntaxfel, inte fel API-namn/enum-medlemmar/runtime-fel).
+Före det steget: kör `npm run test:addon` (Lua-tester i `tests/addon/`,
+laddar de RIKTIGA addonfilerna mot ett stubbat WoW-API i wasmoon/Lua 5.4) och
+lägg till tester där när addonet ändras — de bevisar logik, inte att spelet
+accepterar varje API-namn, så spelverifieringen ovan gäller fortfarande.
