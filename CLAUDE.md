@@ -617,9 +617,23 @@ eftersom.]
         sökrutan). Post räknas inte: ett item kvar i brevlådan visas som saknat.
       * Logiken är rena funktioner (`WowAHTrackerStock_RestockList` /
         `_RestockText`) i `Stock.lua` (ingen ny fil → ingen .toc-ändring →
-        `/reload` räcker). 33 kontroller i `tests/addon/restock.test.lua`
+        `/reload` räcker). Kontroller i `tests/addon/restock.test.lua`
         (`npm run test:addon`), inkl. en mutationskontroll; EJ spelverifierat
         än — särskilt placeringen bredvid TSM:s AH-fönster är oprövad.
+      * **Minimapknapp + `/waht restock` (byggt 2026-10-03, Simons önskan)**:
+        egenbyggd knapp på minimapens kant (inget bibliotek): vänsterklick =
+        öppna/stäng fönstret NU, var som helst; högerklick = slå av/på att det
+        öppnas av sig självt vid AH:t (sparas per konto,
+        `WowAHTrackerStockDB.restockAuto`); dra = flytta längs kanten (vinkel
+        sparas). `/waht restock` = samma som högerklick, `/waht restock show` =
+        samma som vänsterklick, `/waht minimap` = dölj/visa knappen. Ett fönster
+        öppnat av AH:t stängs med det; ett manuellt öppnat stannar.
+        **Borta från AH:t** används karaktärens senast sparade
+        listningssnapshot (≤ 48 h, samma regel som överallt) och fönstret säger
+        hur gammal den är; den "levande" listan används ALDRIG där — klienten
+        kan ha kvar sin lista från tidigare i sessionen utan ålder (hittat av
+        testerna). Vid AH:t gäller bara den levande listan, som förut. Post
+        räknas fortfarande inte (Simons val 2026-10-03: "No need to add mail").
       * Känd begränsning (inte åtgärdad, Simons val): loggar man ut direkt efter
         sista posten kan klientens egna-auktionslista hinna sakna de nya
         listningarna (2 av 77 karaktärer 2026-10-03) — vänta 2–3 s före

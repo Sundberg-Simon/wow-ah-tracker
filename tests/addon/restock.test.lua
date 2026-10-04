@@ -42,7 +42,9 @@ local function newObject(kind)
 	end
 	o.SetHeight = function(self, h) self.height = h end
 	o.CreateFontString = function(self) local fs = newObject("FontString"); return fs end
+	o.CreateTexture = function(self) return newObject("Texture") end
 	o.GetPoint = function(self) return "CENTER", nil, "CENTER", 10, 20 end
+	o.SetPoint = function(self, ...) self.point = { ... } end
 	return o
 end
 function CreateFrame(kind, name, parent, template)
@@ -53,6 +55,20 @@ function CreateFrame(kind, name, parent, template)
 	return f
 end
 UIParent = newObject("Frame")
+Minimap = newObject("Frame")
+Minimap.GetWidth = function() return 140 end
+Minimap.GetCenter = function() return 500, 400 end
+Minimap.GetEffectiveScale = function() return 1 end
+local cursorX, cursorY = 500, 600
+function GetCursorPosition() return cursorX, cursorY end
+local tooltipLines = {}
+GameTooltip = {
+	SetOwner = function() tooltipLines = {} end,
+	SetText = function(_, t) table.insert(tooltipLines, t) end,
+	AddLine = function(_, t) table.insert(tooltipLines, t) end,
+	Show = function() end,
+	Hide = function() end,
+}
 DEFAULT_CHAT_FRAME = { AddMessage = function(_, msg) end }
 SlashCmdList = {}
 BACKPACK_CONTAINER, NUM_BAG_SLOTS = 0, 4
@@ -242,5 +258,72 @@ bagsLoaded = true
 -- Dragging remembers the position.
 window().scripts.OnDragStop(window())
 check("position saved", WowAHTrackerStockDB.restockPos and WowAHTrackerStockDB.restockPos.x == 10)
+
+-- ---------- minimap button + /waht restock ----------
+local mb = _G.WowAHTrackerMinimapButton
+check("minimap button created at login", mb ~= nil and mb:IsShown())
+check("button sits on the minimap edge", mb.point and mb.point[2] == Minimap and math.abs(math.sqrt(mb.point[4] ^ 2 + mb.point[5] ^ 2) - 80) < 0.01, mb.point and (mb.point[4] .. "," .. mb.point[5]))
+
+-- reset: AH closed, window closed
+fire("AUCTION_HOUSE_CLOSED")
+if window():IsShown() then WowAHTrackerStock_ToggleRestockWindow() end
+check("window closed before the button tests", not window():IsShown())
+
+-- away from the AH: last snapshot (1h old) stands in for listings
+bagContents = {}
+WowAHTrackerStockDB.characters["Garona|Tester"].auctions = { ts = nowUnix - 3600, counts = { [VIAL] = 1, [SAPPHIRE] = 1, [ONYX] = 0, [GOLEM] = 0 } }
+mb.scripts.OnClick(mb, "LeftButton")
+check("left-click opens the window away from the AH", window():IsShown())
+check("away from the AH: snapshot listings count, age shown", contains(body(), "Restock (1):") and contains(body(), "Jeweled Onyx Panther") and contains(body(), "Listings as of your last AH visit (60m ago)"), body())
+mb.scripts.OnClick(mb, "LeftButton")
+check("left-click again closes it", not window():IsShown())
+
+-- a snapshot older than 48h is not trusted
+WowAHTrackerStockDB.characters["Garona|Tester"].auctions.ts = nowUnix - 49 * 3600
+WowAHTrackerStock_RestockCommand("show")
+check("/waht restock show opens it", window():IsShown())
+check("stale snapshot -> not sure, never 'restock'", contains(body(), "Not in bags (3)") and not contains(body(), "Restock (") and contains(body(), "listings unknown until you open it"), body())
+
+-- a manually opened window survives the AH opening and closing, and goes live at the AH
+ownedFull = true
+owned = { { itemKey = { itemID = VIAL }, quantity = 1, status = 0 } }
+fire("AUCTION_HOUSE_SHOW")
+check("manual window goes live at the AH", window():IsShown() and contains(body(), "Restock (2):") and not contains(body(), "last AH visit"), body())
+fire("AUCTION_HOUSE_CLOSED")
+check("manual window stays after the AH closes", window():IsShown())
+WowAHTrackerStock_RestockCommand("show")
+check("closed again", not window():IsShown())
+
+-- right-click: automatic opening off/on
+mb.scripts.OnClick(mb, "RightButton")
+check("right-click switches automatic opening off", WowAHTrackerStockDB.restockAuto == false)
+fire("AUCTION_HOUSE_SHOW")
+check("auto off -> the AH doesn't open it", not window():IsShown())
+mb.scripts.OnEnter(mb)
+check("tooltip says OFF", contains(table.concat(tooltipLines, "\n"), "OFF"))
+WowAHTrackerStock_RestockCommand("")
+check("/waht restock switches it back on, and opens it at the open AH", WowAHTrackerStockDB.restockAuto == true and window():IsShown())
+mb.scripts.OnEnter(mb)
+check("tooltip says ON", contains(table.concat(tooltipLines, "\n"), "ON"))
+fire("AUCTION_HOUSE_CLOSED")
+check("auto-opened window closes with the AH", not window():IsShown())
+WowAHTrackerStock_RestockCommand("bogus")
+check("unknown argument changes nothing", WowAHTrackerStockDB.restockAuto == true and not window():IsShown())
+
+-- dragging moves it around the edge and remembers the angle
+cursorX, cursorY = 500, 600 -- straight above the minimap centre
+mb.scripts.OnDragStart(mb)
+check("drag starts following the cursor", mb.scripts.OnUpdate ~= nil)
+mb.scripts.OnUpdate(mb)
+mb.scripts.OnDragStop(mb)
+check("angle saved (90 degrees)", math.abs((WowAHTrackerStockDB.minimap.angle or 0) - 90) < 0.01, WowAHTrackerStockDB.minimap.angle)
+check("button moved to the top of the edge", math.abs(mb.point[4]) < 0.01 and math.abs(mb.point[5] - 80) < 0.01)
+check("drag stops following", mb.scripts.OnUpdate == nil)
+
+-- /waht minimap hides and shows the button
+WowAHTrackerStock_MinimapCommand()
+check("/waht minimap hides it (remembered)", not mb:IsShown() and WowAHTrackerStockDB.minimap.hide == true)
+WowAHTrackerStock_MinimapCommand()
+check("and shows it again", mb:IsShown() and WowAHTrackerStockDB.minimap.hide == false)
 
 print(string.format("%d passed, %d failed", passed, failed))

@@ -321,6 +321,11 @@ local COMMANDS = {
 		desc = "Crafted-item stock per realm cluster on THIS account (bags + own auction listings) with OUT/LOW/UNKNOWN flags; the earnings report combines all accounts.",
 	},
 	{
+		usage = "/waht restock [show]",
+		desc = "Switch the restock window opening by itself at the Auction House on/off; 'show' opens or closes it right now (also: left-click the minimap button).",
+	},
+	{ usage = "/waht minimap", desc = "Hide or show the minimap button." },
+	{
 		usage = "/waht stockprobe [item id or name]",
 		desc = "Report what the client can see of Vial of the Sands / Sky Golem stock (bags, bank, Warband bank, mail, own auctions) right now - run it with everything closed, then at the bank, mailbox and Auction House.",
 	},
@@ -389,6 +394,18 @@ SlashCmdList["WOWAHTRACKER"] = function(msg)
 	elseif command == "stock" then
 		if WowAHTrackerStock_Print then
 			WowAHTrackerStock_Print()
+		else
+			printMsg("Stock module failed to load - check for a Lua error at login.")
+		end
+	elseif command == "restock" then
+		if WowAHTrackerStock_RestockCommand then
+			WowAHTrackerStock_RestockCommand(rest)
+		else
+			printMsg("Stock module failed to load - check for a Lua error at login.")
+		end
+	elseif command == "minimap" then
+		if WowAHTrackerStock_MinimapCommand then
+			WowAHTrackerStock_MinimapCommand()
 		else
 			printMsg("Stock module failed to load - check for a Lua error at login.")
 		end

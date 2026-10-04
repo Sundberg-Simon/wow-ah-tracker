@@ -939,7 +939,17 @@ function WowAHTrackerStock_RestockText(r)
 end
 
 local restockFrame, restockBody
-local ahOpen, restockDismissed = false, false
+local ahOpen = false
+-- Who has the window open: nil (closed), "ah" (opened by the AH, closes with
+-- it) or "manual" (minimap button / /waht restock show, stays until closed).
+-- The X just closes it: an AH-opened window comes back at the next AH visit.
+local restockShownBy = nil
+
+-- Opens with the AH unless switched off (/waht restock, or right-click on the
+-- minimap button). Per account, like the rest of WowAHTrackerStockDB.
+local function restockAutoEnabled()
+	return not (WowAHTrackerStockDB and WowAHTrackerStockDB.restockAuto == false)
+end
 
 local function restockWindow()
 	if restockFrame then
@@ -987,7 +997,7 @@ local function restockWindow()
 	local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
 	close:SetPoint("TOPRIGHT", -2, -2)
 	close:SetScript("OnClick", function()
-		restockDismissed = true -- back at the next AH visit
+		restockShownBy = nil -- an AH-opened window is back at the next AH visit
 		f:Hide()
 	end)
 
@@ -1003,17 +1013,50 @@ local function restockWindow()
 	return f
 end
 
+-- Listing counts for the window, and (outside the AH) how old they are.
+-- At the AH only the live list counts: a saved snapshot from the last visit
+-- would still show listings that have since sold or expired. Away from the AH
+-- the client may still hold its owned-auction list from earlier in the
+-- session, but with no age attached - so it's never used there; this
+-- character's last snapshot (<= 48h, the same rule as everywhere else) stands
+-- in instead, labelled with its age.
+local function restockListings(items)
+	if ahOpen then
+		return ownedAuctionCounts(items), nil
+	end
+	local rec = characterRecord(false)
+	local snap = rec and rec.auctions
+	if snap and snap.counts and snap.ts and (time() - snap.ts) <= AUCTION_MAX_AGE_SECONDS then
+		return snap.counts, snap.ts
+	end
+	return nil, nil
+end
+
 local function refreshRestockWindow()
-	if not ahOpen or restockDismissed then
+	if not restockShownBy then
 		return
 	end
 	local items = craftedItems()
-	local result = WowAHTrackerStock_RestockList(items, scanBagCounts(items), ownedAuctionCounts(items))
+	local listings, asOf = restockListings(items)
+	local result = WowAHTrackerStock_RestockList(items, scanBagCounts(items), listings)
+	local text = WowAHTrackerStock_RestockText(result)
+	if asOf then
+		text = text .. string.format("\n|cffaaaaaaListings as of your last AH visit (%s).|r", ageText(asOf, time()))
+	elseif not ahOpen and not listings then
+		text = text .. "\n|cffaaaaaaNot at the AH: listings unknown until you open it.|r"
+	end
 	local f = restockWindow()
 	f.title:SetText(string.format("Restock - %s", GetRealmName() or "?"))
-	restockBody:SetText(WowAHTrackerStock_RestockText(result))
+	restockBody:SetText(text)
 	f:SetHeight(math.max(60, restockBody:GetStringHeight() + 40))
 	f:Show()
+end
+
+local function hideRestockWindow()
+	restockShownBy = nil
+	if restockFrame then
+		restockFrame:Hide()
+	end
 end
 
 local function onAuctionHouseShown()
@@ -1021,15 +1064,187 @@ local function onAuctionHouseShown()
 		return -- both AH-open events can fire for the same visit
 	end
 	ahOpen = true
-	restockDismissed = false
-	refreshRestockWindow()
+	if not restockShownBy and restockAutoEnabled() then
+		restockShownBy = "ah"
+	end
+	refreshRestockWindow() -- a manually opened window switches to live listings
 end
 
 local function onAuctionHouseClosed()
 	ahOpen = false
-	if restockFrame then
-		restockFrame:Hide()
+	if restockShownBy == "ah" then
+		hideRestockWindow()
+	else
+		refreshRestockWindow() -- a manually opened window stays, back on the saved snapshot
 	end
+end
+
+-- Minimap button left-click / `/waht restock show`: open or close the window now, anywhere.
+function WowAHTrackerStock_ToggleRestockWindow()
+	if restockShownBy then
+		hideRestockWindow()
+	else
+		restockShownBy = "manual"
+		refreshRestockWindow()
+	end
+end
+
+-- Minimap button right-click / `/waht restock`: should the window open by itself at the AH?
+function WowAHTrackerStock_ToggleRestockAuto()
+	EnsureDB()
+	local enable = not restockAutoEnabled()
+	WowAHTrackerStockDB.restockAuto = enable
+	if enable then
+		printMsg("Restock window: opens automatically at the Auction House.")
+		if ahOpen and not restockShownBy then
+			restockShownBy = "ah"
+			refreshRestockWindow()
+		end
+	else
+		printMsg("Restock window: no longer opens by itself - left-click the minimap button or /waht restock show to open it.")
+		if restockShownBy == "ah" then
+			hideRestockWindow()
+		end
+	end
+	if WowAHTrackerStock_UpdateMinimapButton then
+		WowAHTrackerStock_UpdateMinimapButton()
+	end
+end
+
+function WowAHTrackerStock_RestockCommand(arg)
+	arg = (arg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+	if arg == "show" or arg == "open" then
+		WowAHTrackerStock_ToggleRestockWindow()
+	elseif arg == "" or arg == "auto" then
+		WowAHTrackerStock_ToggleRestockAuto()
+	else
+		printMsg("Usage: /waht restock (switch opening at the AH on/off) | /waht restock show (open/close it now)")
+	end
+end
+
+-- ============================================================================
+-- MINIMAP BUTTON: a small round button on the minimap's edge (no library -
+-- the classic hand-built kind). Left-click opens/closes the restock window,
+-- right-click switches automatic opening at the AH on/off, drag moves it around
+-- the edge. Position and visibility are kept per account; /waht minimap hides
+-- or shows it.
+-- ============================================================================
+
+local MINIMAP_DEFAULT_ANGLE = 210 -- degrees, lower left
+local minimapButton
+
+local function minimapSettings()
+	EnsureDB()
+	WowAHTrackerStockDB.minimap = WowAHTrackerStockDB.minimap or {}
+	return WowAHTrackerStockDB.minimap
+end
+
+local function placeMinimapButton()
+	if not (minimapButton and Minimap) then
+		return
+	end
+	local angle = math.rad(minimapSettings().angle or MINIMAP_DEFAULT_ANGLE)
+	local radius = (Minimap:GetWidth() or 140) / 2 + 10
+	minimapButton:ClearAllPoints()
+	minimapButton:SetPoint("CENTER", Minimap, "CENTER", math.cos(angle) * radius, math.sin(angle) * radius)
+end
+
+-- math.atan2 is Lua 5.1 (the game); math.atan(y, x) is the same in 5.3+.
+local atan2 = math.atan2 or function(y, x)
+	return math.atan(y, x)
+end
+
+local function dragMinimapButton()
+	local mx, my = Minimap:GetCenter()
+	local cx, cy = GetCursorPosition()
+	local scale = Minimap:GetEffectiveScale()
+	if not (mx and cx and scale and scale > 0) then
+		return
+	end
+	minimapSettings().angle = math.deg(atan2(cy / scale - my, cx / scale - mx))
+	placeMinimapButton()
+end
+
+function WowAHTrackerStock_UpdateMinimapButton()
+	if not minimapButton then
+		return
+	end
+	if minimapSettings().hide then
+		minimapButton:Hide()
+	else
+		placeMinimapButton()
+		minimapButton:Show()
+	end
+end
+
+local function createMinimapButton()
+	if minimapButton or not Minimap then
+		return
+	end
+	local b = CreateFrame("Button", "WowAHTrackerMinimapButton", Minimap)
+	b:SetSize(31, 31)
+	b:SetFrameStrata("MEDIUM")
+	b:SetFrameLevel(8)
+	b:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+	b:RegisterForDrag("LeftButton")
+	b:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
+	local bg = b:CreateTexture(nil, "BACKGROUND")
+	bg:SetSize(20, 20)
+	bg:SetTexture("Interface\\Minimap\\UI-Minimap-Background")
+	bg:SetPoint("TOPLEFT", 7, -5)
+	local icon = b:CreateTexture(nil, "ARTWORK")
+	icon:SetSize(17, 17)
+	icon:SetTexture("Interface\\Icons\\INV_Misc_Coin_02")
+	icon:SetPoint("TOPLEFT", 7, -6)
+	local border = b:CreateTexture(nil, "OVERLAY")
+	border:SetSize(53, 53)
+	border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
+	border:SetPoint("TOPLEFT")
+
+	b:SetScript("OnClick", function(_, button)
+		if button == "RightButton" then
+			WowAHTrackerStock_ToggleRestockAuto()
+		else
+			WowAHTrackerStock_ToggleRestockWindow()
+		end
+	end)
+	b:SetScript("OnDragStart", function(self)
+		self:SetScript("OnUpdate", dragMinimapButton)
+	end)
+	b:SetScript("OnDragStop", function(self)
+		self:SetScript("OnUpdate", nil)
+	end)
+	b:SetScript("OnEnter", function(self)
+		if not GameTooltip then
+			return
+		end
+		GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+		GameTooltip:SetText("WoW AH Tracker")
+		GameTooltip:AddLine("Left-click: open/close the restock window", 1, 1, 1)
+		GameTooltip:AddLine(
+			"Right-click: open it at the AH automatically - " .. (restockAutoEnabled() and "|cff33ff99ON|r" or "|cffff5555OFF|r"),
+			1,
+			1,
+			1
+		)
+		GameTooltip:AddLine("Drag: move around the minimap. /waht minimap hides this button.", 0.7, 0.7, 0.7)
+		GameTooltip:Show()
+	end)
+	b:SetScript("OnLeave", function()
+		if GameTooltip then
+			GameTooltip:Hide()
+		end
+	end)
+	minimapButton = b
+	WowAHTrackerStock_UpdateMinimapButton()
+end
+
+function WowAHTrackerStock_MinimapCommand()
+	local s = minimapSettings()
+	s.hide = not s.hide
+	createMinimapButton()
+	WowAHTrackerStock_UpdateMinimapButton()
+	printMsg(s.hide and "Minimap button hidden - /waht minimap brings it back." or "Minimap button shown.")
 end
 
 local function isAuctioneerInteraction(interactionType)
@@ -1053,6 +1268,7 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1)
 		end
 	elseif event == "PLAYER_LOGIN" then
 		printLoginLine()
+		createMinimapButton()
 	elseif event == "BAG_UPDATE_DELAYED" then
 		requestBagScan()
 		refreshRestockWindow()
