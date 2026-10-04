@@ -618,8 +618,9 @@ eftersom.]
       * Logiken är rena funktioner (`WowAHTrackerStock_RestockList` /
         `_RestockText`) i `Stock.lua` (ingen ny fil → ingen .toc-ändring →
         `/reload` räcker). Kontroller i `tests/addon/restock.test.lua`
-        (`npm run test:addon`), inkl. en mutationskontroll; EJ spelverifierat
-        än — särskilt placeringen bredvid TSM:s AH-fönster är oprövad.
+        (`npm run test:addon`), inkl. en mutationskontroll. **Spelverifierat
+        2026-10-04**: Simon körde en hel AH-runda med fönstret och bekräftade att
+        det fungerar. Minimapknappen (nedan) är inte separat återrapporterad.
       * **Minimapknapp + `/waht restock` (byggt 2026-10-03, Simons önskan)**:
         egenbyggd knapp på minimapens kant (inget bibliotek): vänsterklick =
         öppna/stäng fönstret NU, var som helst; högerklick = slå av/på att det
